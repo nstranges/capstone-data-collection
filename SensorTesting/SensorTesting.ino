@@ -31,10 +31,15 @@ void loop() {
   // Print values to be read by the Python script
   Serial.print("xaccel ");
   Serial.println(a.acceleration.x);
-  
   Serial.print("yaccel ");
   Serial.println(a.acceleration.y);
-  
   Serial.print("zaccel ");
   Serial.println(a.acceleration.z);
+  Serial.print("xrot ");
+  Serial.println(a.gyro.x);
+  Serial.print("yrot ");
+  Serial.println(a.gyro.y);
+  Serial.print("zrot ");
+  Serial.println(a.gyro.z);
+  
 }
