@@ -29,8 +29,8 @@ def countdown(seconds):
 # Read value from the serial port
 def readserial(comport, baudrate, duration=1):
     ser = serial.Serial(comport, baudrate, timeout=0.01)         # 1/timeout is the frequency at which the port is read
-    data_df = pd.DataFrame(columns=['Timestamp', 'xaccel', 'yaccel', 'zaccel', 'xrot', 'yrot', 'zrot'])
-    data = {"xaccel": None, "yaccel": None, "zaccel": None, "xrot": None, "yrot": None, "zrot": None}
+    data_df = pd.DataFrame(columns=['Timestamp', 'xaccel', 'yaccel', 'zaccel', 'xrot', 'yrot', 'zrot', 'pulse'])
+    data = {"xaccel": None, "yaccel": None, "zaccel": None, "xrot": None, "yrot": None, "zrot": None, "pulse": None}
     samples = 0
 
     # Start timer
@@ -60,7 +60,10 @@ def readserial(comport, baudrate, duration=1):
                     data["yrot"] = data_point 
 
                 elif line.startswith("zrot"):
-                    data["zrot"] = data_point 
+                    data["zrot"] = data_point
+
+                elif line.startswith("pulse"):
+                    data["pulse"] = data_point
 
             except (IndexError, ValueError):
                 continue

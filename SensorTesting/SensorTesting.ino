@@ -3,8 +3,13 @@
 #include <Wire.h>
 
 Adafruit_MPU6050 mpu;
+int pulsePin = 18;
+int pulse;
 
 void setup(void) {
+  pinMode(pulsePin, INPUT);  
+
+
   Serial.begin(115200);
   while (!Serial)
     delay(10);
@@ -25,11 +30,13 @@ void setup(void) {
 }
 
 void loop() {
+  // Read sensors
+  pulse = analogRead(pulsePin);
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
   // Print values to be read by the Python script
-  Serial.print("xaccel ");
+  /*Serial.print("xaccel ");
   Serial.println(a.acceleration.x);
   Serial.print("yaccel ");
   Serial.println(a.acceleration.y);
@@ -40,6 +47,7 @@ void loop() {
   Serial.print("yrot ");
   Serial.println(a.gyro.y);
   Serial.print("zrot ");
-  Serial.println(a.gyro.z);
-  
+  Serial.println(a.gyro.z);*/
+  Serial.print("pulse ");
+  Serial.println(pulse);
 }
