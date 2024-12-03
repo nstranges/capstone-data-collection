@@ -1,9 +1,9 @@
 import serial
 import time
+from datetime import datetime
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
-import time
 import os
 
 serial_port = 'COM3'
@@ -11,7 +11,6 @@ baud_rate = 115200
 
 # Displays the image
 def display_image(image_path):
-    plt.close
     img = mpimg.imread(image_path)
     plt.imshow(img)
     plt.axis('off')
@@ -28,16 +27,16 @@ def countdown(seconds):
 
 # Read value from the serial port
 def readserial(comport, baudrate, duration=1):
-    ser = serial.Serial(comport, baudrate, timeout=0.01)         # 1/timeout is the frequency at which the port is read
-    data_df = pd.DataFrame(columns=['Timestamp', 'xaccel', 'yaccel', 'zaccel', 'xrot', 'yrot', 'zrot', 'pulse'])
-    data = {"xaccel": None, "yaccel": None, "zaccel": None, "xrot": None, "yrot": None, "zrot": None, "pulse": None}
+    ser = serial.Serial(comport, baudrate, timeout=0.05)         # 1/timeout is the frequency at which the port is read
+    data_df = pd.DataFrame(columns=['Timestamp', 'xaccel', 'yaccel', 'zaccel', 'xrot', 'yrot', 'zrot', 'emg1', 'emg2', 'emg3', 'pulse'])
+    data = {"xaccel": None, "yaccel": None, "zaccel": None, "xrot": None, "yrot": None, "zrot": None, "emg1": None, "emg2": None, "emg3": None, "pulse": None}
     samples = 0
 
     # Start timer
     start_time = time.time()
 
     while time.time() - start_time < duration:
-        timestamp = time.strftime('%H:%M:%S.%f')
+        timestamp = datetime.now().strftime('%H:%M:%S.%f')
 
         # Putting into dictonary
         line = ser.readline().decode(errors='ignore').strip()
@@ -62,6 +61,15 @@ def readserial(comport, baudrate, duration=1):
                 elif line.startswith("zrot"):
                     data["zrot"] = data_point
 
+                elif line.startswith("emg1"):
+                    data["emg1"] = data_point
+                
+                elif line.startswith("emg2"):
+                    data["emg2"] = data_point
+
+                elif line.startswith("emg3"):
+                    data["emg3"] = data_point
+
                 elif line.startswith("pulse"):
                     data["pulse"] = data_point
 
@@ -78,7 +86,7 @@ def readserial(comport, baudrate, duration=1):
     return data_df
 
 # Data Collection loop
-def collection():
+def collection(orientations_per_pos=1):
     serial_port = 'COM3'
     baud_rate = 115200
 
@@ -95,8 +103,6 @@ def collection():
         23: "Pictures/pic_23.jpeg",
         123: "Pictures/pic_123.jpeg"
     }
-    orientations_per_pos = 1
-
     
     name = input(f"Enter User's name and press Enter...\n")
 
@@ -107,11 +113,12 @@ def collection():
     # Go through all positions and orientations
     for pos in positions:
         # Display the example image
-        print("Please see the image on hand position")
         display_image(pic_positions[pos])
+        print("Please see the image on hand position")
 
         for ori in range(orientations_per_pos):
             input("Change the orientation of your hand to a random position. Press enter...\n")
+            plt.close()
 
             countdown(3)
 
@@ -125,4 +132,6 @@ def collection():
     writer.close()
 
 if __name__ == '__main__':
-    collection()
+    orientations_per_pos = 1
+    
+    collection(orientations_per_pos)
