@@ -5,7 +5,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.image as mpimg
 from datetime import datetime
-from multiprocessing import Process, Queue
+import numpy as np
 
 serial_port = 'COM3'
 baud_rate = 115200
@@ -27,8 +27,8 @@ def countdown(seconds):
     print("Go!")
 
 # Read value from the serial port
-def readserial(comport, baudrate, duration=1):
-    ser = serial.Serial(comport, baudrate, timeout=0.05)  # Adjust timeout as needed
+def readserial(comport, baudrate, datapoints=60):
+    ser = serial.Serial(comport, baudrate, timeout=0.1)  # Adjust timeout as needed
     data_df = pd.DataFrame(columns=['Timestamp', 'xaccel', 'yaccel', 'zaccel', 
                                     'xrot', 'yrot', 'zrot', 'emg1', 'emg2', 
                                     'emg3', 'pulse'])
@@ -38,12 +38,13 @@ def readserial(comport, baudrate, duration=1):
         "emg1": None, "emg2": None, "emg3": None, 
         "pulse": None
     }
-    samples = 0
 
-    # Start timer
-    start_time = time.time()
+    # Clear buffer and start timer
+    ser.reset_input_buffer()
 
-    while time.time() - start_time < duration:
+    points = 0
+
+    while points < datapoints:
         timestamp = datetime.now().strftime('%H:%M:%S.%f')
 
         line = ser.readline().decode(errors='ignore').strip()
@@ -75,16 +76,13 @@ def readserial(comport, baudrate, duration=1):
 
         # Batch add to dataframe
         if all(data.values()):
-            data_df.loc[len(data_df)] = [timestamp, *data.values()]
-            data = {key: None for key in data}  # Resetting dictionary
-            samples += 1
+            cleaned_data = [timestamp] + [value if value is not None else np.nan for value in data.values()]
+            data_df.loc[len(data_df)] = cleaned_data
+            data = {key: None for key in data}
+            points += 1
 
     ser.close()
     return data_df
-
-def readserial_in_process(queue, comport, baudrate, duration=1):
-    data_df = readserial(comport, baudrate, duration)
-    queue.put(data_df)
 
 # Data Collection loop
 def collection(orientations_per_pos=1):
@@ -121,14 +119,8 @@ def collection(orientations_per_pos=1):
 
             countdown(3)
 
-            # Using multiprocessing to capture all data
-            queue = Queue()
-            p = Process(target=readserial_in_process, args=(queue, serial_port, baud_rate, 1))
-            p.start()
-            p.join()
-            
             # Retrieve the data from the queue
-            data_df = queue.get()
+            data_df = readserial(serial_port, baud_rate)
             data_df['Position'] = pos
             data_df['Orientation'] = ori
             data_df.to_excel(writer, sheet_name=f'Position_{pos}', index=False)
