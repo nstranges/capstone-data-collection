@@ -104,9 +104,8 @@ def collection(orientations_per_pos=1):
 
     name = input("Enter User's name and press Enter...\n")
 
-    # Excel writer
-    os.makedirs('Data', exist_ok=True)
-    writer = pd.ExcelWriter('Data/' + name + '_data.xlsx', engine='xlsxwriter')
+    # Dataframe for loading 
+    combined_df = pd.DataFrame()
 
     for pos in positions:
         # Display the example image
@@ -123,12 +122,16 @@ def collection(orientations_per_pos=1):
             data_df = readserial(serial_port, baud_rate)
             data_df['Position'] = pos
             data_df['Orientation'] = ori
-            data_df.to_excel(writer, sheet_name=f'Position_{pos}', index=False)
+            combined_df = pd.concat([combined_df, data_df], ignore_index=True)
 
             print("Data collected")
 
+    # Write to the excel
+    os.makedirs('Data', exist_ok=True)
+    writer = pd.ExcelWriter('Data/' + name + '_data.xlsx', engine='xlsxwriter')
+    combined_df.to_excel(writer, sheet_name='Data', index=False)
     writer.close()
 
 if __name__ == '__main__':
-    orientations_per_pos = 1
+    orientations_per_pos = 9
     collection(orientations_per_pos)
