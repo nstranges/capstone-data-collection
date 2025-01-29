@@ -11,9 +11,9 @@ def train_model(X_train, y_train, X_test, y_test, feature_names):
     rf_model = RandomForestClassifier(
         verbose=1,
         n_jobs=-1,
-        n_estimators=25, #try 50 # was 100
+        n_estimators=10, #try 50 # was 100
         # max_depth = 10, #default is none
-        # max_features=0.5, # Fewer features per split, less memory
+        max_features=0.5, # Fewer features per split, less memory
         random_state=42
     )
 
@@ -25,7 +25,7 @@ def train_model(X_train, y_train, X_test, y_test, feature_names):
     # Evaluate model
     metrics_rf = calculate_performance_metrics(y_test, y_pred)
     print_performance_metrics(metrics_rf)
-    #feature_importance(rf_model, X_train, feature_names)
+    feature_importance(rf_model, X_train, feature_names)
 
     return rf_model
 
@@ -62,15 +62,55 @@ def feature_importance(model, X, feature_names):
     for feature, importance in feature_importances_list:
         print(f"{feature}: {importance}")
 
+# Formatting the variable drops
+def makeDropList(appender):
+    xa = 'xaccel_' + appender
+    ya = 'yaccel_' + appender
+    za = 'zaccel_' + appender
+    xr = 'xrot_' + appender
+    yr = 'yrot_' + appender
+    zr = 'zrot_' + appender
+
+    return [xa, ya, za, xr, yr, zr]
+
+# Formatting the variable drops
+def secondDropList(appender):
+    emg1 = 'emg1_' + appender
+    emg2 = 'emg2_' + appender
+    emg3 = 'emg3_' + appender
+    pulse = 'pulse_' + appender
+
+    return [emg1, emg2, emg3, pulse]
+
 # Runs the model
 def run_model_training():
     # Load the data
     processed_data = pd.read_csv('processed_data.csv')
-    feature_names = processed_data.columns[:-1].tolist()
+
+    # Dropping accelerometers
+    for num in range(1, 16):
+        i = str(num)
+        cur_drops = makeDropList(appender=i)
+        processed_data = processed_data.drop(columns=cur_drops)
+
+        cur_drops = secondDropList(appender=i)
+        processed_data = processed_data.drop(columns=cur_drops)
+
+    # Dropping avg and var
+    processed_data = processed_data.drop(columns=makeDropList('avg'))
+    processed_data = processed_data.drop(columns=makeDropList('var'))
+    processed_data = processed_data.drop(columns=makeDropList('rms'))
+    processed_data = processed_data.drop(columns=secondDropList('rms'))
+    processed_data = processed_data.drop(columns=makeDropList('first_derivative'))
+    processed_data = processed_data.drop(columns=makeDropList('second_derivative'))
+    processed_data = processed_data.drop(columns=secondDropList('first_derivative'))
+    processed_data = processed_data.drop(columns=secondDropList('second_derivative'))
 
     # Separate data
     X = processed_data.drop(columns=['Position']).values
     y = processed_data['Position'].values
+
+    feature_names = processed_data.columns[:-1].tolist()
 
     # Get test and train
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -79,11 +119,11 @@ def run_model_training():
     # Run the model
     model = train_model(X_train, y_train, X_test, y_test, feature_names)
     
-    # Send the model to code
-    code = m2c.export_to_c(model, function_name="predict")
-    file_path = "modelCode.txt"
-    with open(file_path, "w") as file:
-        file.write(code)
+    #Send the model to code
+    # code = m2c.export_to_c(model, function_name="predict")
+    # file_path = "modelCode.txt"
+    # with open(file_path, "w") as file:
+    #     file.write(code)
 
 
 run_model_training()
