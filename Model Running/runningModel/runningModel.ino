@@ -17,9 +17,10 @@ int rawEmg3;
 double input[8];
 double output[8];
 
+// For sequential samples
 int predVar = 0;
 int predVarCount = 0;
-int maxPredVarCount = 3;
+const int MAX_PRED_VAR_COUNT = 10;
 
 // Shared data queue
 struct SharedData {
@@ -28,6 +29,11 @@ struct SharedData {
     int emg3;
     int pulse;
 };
+
+// Samples to collect
+const int NUM_SAMPLES = 15;
+SharedData samples[NUM_SAMPLES];
+int curSampleCount = 0;
 
 // Data for the feature engineering
 // The array is avg, var
@@ -45,7 +51,7 @@ volatile int modelOutput = 0;
 FeatEng features;
 
 // Data passing
-QueueHandle_t sharedDataQueue;
+SemaphoreHandle_t featuresMutex;
 SemaphoreHandle_t modelFlagMutex;
 SemaphoreHandle_t dataFlagMutex;
 SemaphoreHandle_t outputMutex;
@@ -57,10 +63,13 @@ TaskHandle_t Task2;
 void setup(void) {
     Serial.begin(115200);
 
-    // Q 15 long
-    sharedDataQueue = xQueueCreate(15, sizeof(SharedData));
-
     // Create semaphores
+    featuresMutex = xSemaphoreCreateMutex();
+    if (featuresMutex == NULL) {
+        Serial.println("Failed to create featuresMutex");
+        while (1);  // Halt the program
+    }
+
     modelFlagMutex = xSemaphoreCreateMutex();
     if (modelFlagMutex == NULL) {
         Serial.println("Failed to create modelFlagMutex");
@@ -79,7 +88,6 @@ void setup(void) {
         while (1);  // Halt the program
     }
 
-
     xTaskCreatePinnedToCore(
                     SensorCollection,       /* Task function. */
                     "Sensor Collection",    /* name of task. */
@@ -95,7 +103,7 @@ void setup(void) {
                     "Model Running",        /* name of task. */
                     10000,                  /* Stack size of task */
                     NULL,                   /* parameter of the task */
-                    2,                      /* priority of the task */
+                    1,                      /* priority of the task */
                     &Task2,                 /* Task handle to keep track of created task */
                     1);                     /* pin task to core 1 */
     
@@ -116,9 +124,23 @@ void SensorCollection(void * pvParameters) {
         data.emg2 = analogRead(emgPin2);
         data.emg3 = analogRead(emgPin3);
 
-        // Add data to the queue
-        if (xQueueSend(sharedDataQueue, &data, portMAX_DELAY) != pdTRUE) {
-            Serial.println("Failed to add data to the queue");
+        // Add to the data queue
+        if (curSampleCount >= NUM_SAMPLES) {
+            for(int i=0; i<NUM_SAMPLES-1; i++){
+                samples[i] = samples[i+1];
+            }
+            samples[NUM_SAMPLES - 1] = data;
+
+        } else {
+            samples[curSampleCount] = data;
+            curSampleCount++;
+        }
+
+        // Calculate features
+        if (xSemaphoreTake(featuresMutex, portMAX_DELAY)) {
+            features = calculateFeatures();
+
+            xSemaphoreGive(featuresMutex);
         }
 
         // Check for new data
@@ -137,7 +159,7 @@ void SensorCollection(void * pvParameters) {
                         predVarCount = 0;
                     }
 
-                    if (predVarCount >= maxPredVarCount) {
+                    if (predVarCount >= MAX_PRED_VAR_COUNT) {
                         predVarCount = 0;
                         Serial.println(modelOutput);
                     }
@@ -153,23 +175,15 @@ void SensorCollection(void * pvParameters) {
 
 // Calculating the extra features
 FeatEng calculateFeatures() {
-    SharedData dataArray[15];
     FeatEng features;
-
-    // Collect data samples from the queue
-    for (int i = 0; i < 15; i++) {
-        if (xQueueReceive(sharedDataQueue, &dataArray[i], portMAX_DELAY) != pdTRUE) {
-            Serial.println("Failed to retrieve data from the queue");
-        }
-    }
 
     // Buffers for the calculations
     int emg1Buffer[15], emg2Buffer[15], emg3Buffer[15], pulseBuffer[15];
     for (int i = 0; i < 15; i++) {
-        emg1Buffer[i] = dataArray[i].emg1;
-        emg2Buffer[i] = dataArray[i].emg2;
-        emg3Buffer[i] = dataArray[i].emg3;
-        pulseBuffer[i] = dataArray[i].pulse;
+        emg1Buffer[i] = samples[i].emg1;
+        emg2Buffer[i] = samples[i].emg2;
+        emg3Buffer[i] = samples[i].emg3;
+        pulseBuffer[i] = samples[i].pulse;
     }
 
     // Each feature prep
@@ -194,13 +208,9 @@ void RunModel(void * pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(18); 
     while (true) {
-      	int availableSamples = uxQueueMessagesWaiting(sharedDataQueue);
-        //Serial.println(availableSamples);
 
-      	if (availableSamples >= 15) {
-            // Calculate the features
-            features = calculateFeatures();
-
+        // Format input
+        if (xSemaphoreTake(featuresMutex, portMAX_DELAY)) {
             int sampleIndex = 0;
             for (int i = 0; i < 8; i += 4) {
                 input[i] = features.emg1[sampleIndex];
@@ -210,38 +220,34 @@ void RunModel(void * pvParameters) {
                 sampleIndex++;
             }
 
-            Serial.println("Start");
-            for (int i = 0; i < 8; i++) {
-            Serial.println(input[i]);
+            xSemaphoreGive(featuresMutex);
+        }
+        
+        // Predict with the model
+        predict(input, output);
+
+        // Output the results
+        int maxIndex = 0;
+        float maxVal = 0;
+        for (int i = 0; i < 8; i++) {
+            if (output[i] > maxVal) {
+                maxIndex = i;
+                maxVal = output[i];
             }
-            Serial.println("Finish");
-            
-			// Predict with the model
-			predict(input, output);
+        }
 
-			// Output the results
-			int maxIndex = 0;
-			float maxVal = 0;
-			for (int i = 0; i < 8; i++) {
-				if (output[i] > maxVal) {
-				    maxIndex = i;
-				    maxVal = output[i];
-				}
-			}
+        if (xSemaphoreTake(modelFlagMutex, portMAX_DELAY)) {
+            modelDone = true;
 
-			if (xSemaphoreTake(modelFlagMutex, portMAX_DELAY)) {
-            	modelDone = true;
+            // Getting the model output
+            if (xSemaphoreTake(outputMutex, portMAX_DELAY)) {
+                modelOutput = maxIndex;
 
-            	// Getting the model output
-            	if (xSemaphoreTake(outputMutex, portMAX_DELAY)) {
-					modelOutput = maxIndex;
-
-					xSemaphoreGive(outputMutex);
-				}
-                xSemaphoreGive(modelFlagMutex);
-        	}
-    	}
-     vTaskDelayUntil(&xLastWakeTime, xFrequency);
+                xSemaphoreGive(outputMutex);
+            }
+            xSemaphoreGive(modelFlagMutex);
+        }
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
   	}
 }
 

@@ -44,6 +44,8 @@ def readserial(comport, baudrate, datapoints=60):
 
     points = 0
 
+    print("started")
+
     while points < datapoints:
         timestamp = datetime.now().strftime('%H:%M:%S.%f')
 
@@ -73,6 +75,8 @@ def readserial(comport, baudrate, datapoints=60):
                     data["pulse"] = data_point
             except (IndexError, ValueError):
                 continue
+
+        print(data.values())
 
         # Batch add to dataframe
         if all(data.values()):
