@@ -11,9 +11,9 @@ def train_model(X_train, y_train, X_test, y_test, feature_names):
     rf_model = RandomForestClassifier(
         verbose=1,
         n_jobs=-1,
-        n_estimators=10, #try 50 # was 100
+        n_estimators=50, #try 50 # was 100
         # max_depth = 10, #default is none
-        max_features=0.5, # Fewer features per split, less memory
+        #max_features=0.5, # Fewer features per split, less memory
         random_state=42
     )
 
