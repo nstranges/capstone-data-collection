@@ -34,6 +34,8 @@ struct SharedData {
 const int NUM_SAMPLES = 15;
 SharedData samples[NUM_SAMPLES];
 int curSampleCount = 0;
+const int AVG_SAMPLE_TIME = 18;
+const int MODEL_DELAY_TIME = 1000;
 
 // Data for the feature engineering
 // The array is avg, var
@@ -48,6 +50,7 @@ struct FeatEng {
 volatile bool modelDone = false;
 volatile bool dataDone = false;
 volatile int modelOutput = 0;
+volatile bool modelDelay = false;
 FeatEng features;
 
 // Data passing
@@ -55,6 +58,7 @@ SemaphoreHandle_t featuresMutex;
 SemaphoreHandle_t modelFlagMutex;
 SemaphoreHandle_t dataFlagMutex;
 SemaphoreHandle_t outputMutex;
+SemaphoreHandle_t delayMutex;
 
 // Task declaration
 TaskHandle_t Task1;
@@ -88,6 +92,12 @@ void setup(void) {
         while (1);  // Halt the program
     }
 
+    delayMutex = xSemaphoreCreateMutex();
+    if (delayMutex == NULL) {
+        Serial.println("Failed to create delayMutex");
+        while (1);  // Halt the program
+    }
+
     xTaskCreatePinnedToCore(
                     SensorCollection,       /* Task function. */
                     "Sensor Collection",    /* name of task. */
@@ -114,7 +124,7 @@ void setup(void) {
 void SensorCollection(void * pvParameters) {
     // Timing
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(17);
+    const TickType_t xFrequency = pdMS_TO_TICKS(AVG_SAMPLE_TIME);
 
     while (true) {
         // Read sensors
@@ -162,6 +172,13 @@ void SensorCollection(void * pvParameters) {
                     if (predVarCount >= MAX_PRED_VAR_COUNT) {
                         predVarCount = 0;
                         Serial.println(modelOutput);
+
+                        // Delaying to reduce jitters
+                        if (xSemaphoreTake(delayMutex, portMAX_DELAY)) {
+                            modelDelay = true;
+
+                            xSemaphoreGive(delayMutex);
+                        }
                     }
 
                     xSemaphoreGive(outputMutex);
@@ -206,46 +223,64 @@ FeatEng calculateFeatures() {
 void RunModel(void * pvParameters) {
     // Timing
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(18); 
+    TickType_t xFrequency = pdMS_TO_TICKS(AVG_SAMPLE_TIME); 
+    bool delayTheModel = false;
+
     while (true) {
+        // Check if the model should be delayed
+        if (xSemaphoreTake(delayMutex, portMAX_DELAY)) {
+            delayTheModel = modelDelay;
+            modelDelay = false;
 
-        // Format input
-        if (xSemaphoreTake(featuresMutex, portMAX_DELAY)) {
-            int sampleIndex = 0;
-            for (int i = 0; i < 8; i += 4) {
-                input[i] = features.emg1[sampleIndex];
-                input[i+1] = features.emg2[sampleIndex];
-                input[i+2] = features.emg3[sampleIndex];
-                input[i+3] = features.pulse[sampleIndex];
-                sampleIndex++;
-            }
-
-            xSemaphoreGive(featuresMutex);
-        }
-        
-        // Predict with the model
-        predict(input, output);
-
-        // Output the results
-        int maxIndex = 0;
-        float maxVal = 0;
-        for (int i = 0; i < 8; i++) {
-            if (output[i] > maxVal) {
-                maxIndex = i;
-                maxVal = output[i];
-            }
+            xSemaphoreGive(delayMutex);
         }
 
-        if (xSemaphoreTake(modelFlagMutex, portMAX_DELAY)) {
-            modelDone = true;
+        // Changing the delay time
+        if (delayTheModel) {
+            xFrequency = pdMS_TO_TICKS(MODEL_DELAY_TIME);
+        }
+        else{
+            // Setting the regular frequency
+            xFrequency = pdMS_TO_TICKS(AVG_SAMPLE_TIME); 
 
-            // Getting the model output
-            if (xSemaphoreTake(outputMutex, portMAX_DELAY)) {
-                modelOutput = maxIndex;
+            // Format input
+            if (xSemaphoreTake(featuresMutex, portMAX_DELAY)) {
+                int sampleIndex = 0;
+                for (int i = 0; i < 8; i += 4) {
+                    input[i] = features.emg1[sampleIndex];
+                    input[i+1] = features.emg2[sampleIndex];
+                    input[i+2] = features.emg3[sampleIndex];
+                    input[i+3] = features.pulse[sampleIndex];
+                    sampleIndex++;
+                }
 
-                xSemaphoreGive(outputMutex);
+                xSemaphoreGive(featuresMutex);
             }
-            xSemaphoreGive(modelFlagMutex);
+            
+            // Predict with the model
+            predict(input, output);
+
+            // Output the results
+            int maxIndex = 0;
+            float maxVal = 0;
+            for (int i = 0; i < 8; i++) {
+                if (output[i] > maxVal) {
+                    maxIndex = i;
+                    maxVal = output[i];
+                }
+            }
+
+            if (xSemaphoreTake(modelFlagMutex, portMAX_DELAY)) {
+                modelDone = true;
+
+                // Getting the model output
+                if (xSemaphoreTake(outputMutex, portMAX_DELAY)) {
+                    modelOutput = maxIndex;
+
+                    xSemaphoreGive(outputMutex);
+                }
+                xSemaphoreGive(modelFlagMutex);
+            }
         }
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
   	}
