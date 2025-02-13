@@ -5,25 +5,18 @@ from sklearn.model_selection import train_test_split
 import m2cgen as m2c
 import pandas as pd
 import re
-from sklearn.neural_network import MLPClassifier
 
 # Train and test the model
 def train_model(X_train, y_train, X_test, y_test, feature_names):
     # Initialize and fit the model
-    # rf_model = RandomForestClassifier(
-    #     verbose=1,
-    #     n_jobs=-1,
-    #     n_estimators=25, #try 50 # was 100
-    #     #max_depth = 10, #default is none
-    #     #max_features=3, # Fewer features per split, less memory
-    #     random_state=42
-    # )
-
-    rf_model = MLPClassifier(hidden_layer_sizes=(1028, 512, 32),  # Two hidden layers with 16 neurons each
-                    activation='relu',            # ReLU activation
-                    solver='adam',                # Adam optimizer
-                    max_iter=500,                 # Increase iterations for convergence
-                    random_state=42)
+    rf_model = RandomForestClassifier(
+        verbose=1,
+        n_jobs=-1,
+        n_estimators=50, #try 50 # was 100
+        #max_depth = 10, #default is none
+        #max_features=3, # Fewer features per split, less memory
+        random_state=42
+    )
 
     rf_model.fit(X_train, y_train)
 
@@ -70,102 +63,187 @@ def feature_importance(model, X, feature_names):
     for feature, importance in feature_importances_list:
         print(f"{feature}: {importance}")
 
-def split_deep_ifs(code_lines, max_depth=3):
+def split_deep_if_else(code_lines, max_depth=3):
+    """
+    Scans through 'code_lines' from m2cgen, extracting entire if/else
+    blocks that exceed 'max_depth'.
+    Returns:
+      refactored_lines: code with deep blocks replaced by function calls
+      extracted_functions: list of (fn_name, block_lines, used_vars)
+    """
     refactored_lines = []
     extracted_functions = []
-    stack = []
-    if_block = []
-    inside_block = False
+    i = 0
     function_count = 0
+    
+    # Tracks our current brace "depth" across the entire file
+    brace_depth = 0
 
-    # Track variables used in each if block (e.g., var2, var49) plus 'output'
-    used_variables = set()
+    # Helper to find all var usage in some lines
+    def find_used_vars(lines):
+        found = set()
+        for ln in lines:
+            found.update(re.findall(r'var(\d+)', ln))
+            if 'output' in ln:
+                found.add('output')
+        return found
 
-    for line in code_lines:
-        indent_level = len(line) - len(line.lstrip())
+    while i < len(code_lines):
+        line = code_lines[i]
+        
+        # If this line starts an if(...) block
+        if re.match(r'\s*(?:else\s+)?if\s*\(', line):
+            # We'll parse the *entire* if/else structure (including nested else if, else)
+            block_lines, end_index = parse_full_if_else_structure(code_lines, i)
 
-        # detect if statement
-        if re.match(r'\s*(?:else\s+)?if\s*\(|\s*else\s*\{', line):
-            stack.append(line)
-            if len(stack) > max_depth:
-                inside_block = True
-                if_block.append(line)
-                # find var usage
-                used_variables.update(re.findall(r'var(\d+)', line))
-                # also capture usage of 'output'
-                if 'output' in line:
-                    used_variables.add('output')
+            # measure how many braces are in the lines prior
+            local_depth = brace_depth
+
+            # Count the max additional nested braces inside this block
+            # to see how deep it goes
+            block_brace_diff = compute_local_depth(block_lines)
+            # The final depth of this block is local_depth + block_brace_diff
+            # If that's more than max_depth, we extract
+            if local_depth + block_brace_diff > max_depth:
+                # Make a function
+                fn_name = f"split_func_{function_count}"
+                function_count += 1
+                
+                # Find used variables
+                used_vars = find_used_vars(block_lines)
+                
+                # Insert a call in the main code
+                indent_level = len(line) - len(line.lstrip())
+                
+                numeric_vars = sorted([v for v in used_vars if v.isdigit()])
+                has_output = ('output' in used_vars)
+
+                if numeric_vars or has_output:
+                    param_call_parts = [f"var{v}" for v in numeric_vars]
+                    if has_output:
+                        param_call_parts.append("output")
+                    call_line = (
+                        " " * indent_level
+                        + f"{fn_name}(input, {', '.join(param_call_parts)});\n"
+                    )
+                else:
+                    call_line = (
+                        " " * indent_level + f"{fn_name}(input);\n"
+                    )
+
+                refactored_lines.append(call_line)
+                
+                extracted_functions.append((fn_name, block_lines, used_vars))
+                
             else:
-                refactored_lines.append(line)
+                # block is shallow enough → keep it inline
+                refactored_lines.extend(block_lines)
+            
+            # we've consumed lines up to end_index
+            # update brace_depth by scanning the block for net +/-
+            brace_depth += net_braces_in_block(block_lines)
+            i = end_index + 1
+
         else:
-            if inside_block:
-                if_block.append(line)
-                used_variables.update(re.findall(r'var(\d+)', line))
-                if 'output' in line:
-                    used_variables.add('output')
-
-                # close block when a '}' is found, reduce stack
-                if '}' in line:
-                    stack.pop()
-                    # if we are back at max_depth, finalize
-                    if len(stack) == max_depth:
-                        inside_block = False
-                        fn_name = f"split_func_{function_count}"
-                        function_count += 1
-                        # copy block lines
-                        block_copy = if_block[:]
-
-                        # Insert call in the main code
-                        # pass all varN used in that block + output
-                        if used_variables:
-                            # separate numeric from 'output'
-                            numeric_vars = sorted([v for v in used_variables if v.isdigit()])
-                            has_output = ('output' in used_variables)
-
-                            # build the parameter call
-                            param_call_parts = []
-                            for v in numeric_vars:
-                                param_call_parts.append(f"var{v}")
-                            if has_output:
-                                param_call_parts.append("output")
-
-                            if param_call_parts:
-                                call_line = (" " * indent_level 
-                                             + f"{fn_name}(input, "
-                                             + ", ".join(param_call_parts) 
-                                             + ");\n")
-                            else:
-                                call_line = (" " * indent_level 
-                                             + f"{fn_name}(input);\n")
-                        else:
-                            call_line = (" " * indent_level 
-                                         + f"{fn_name}(input);\n")
-
-                        refactored_lines.append(call_line)
-
-                        extracted_functions.append((fn_name, block_copy[:], used_variables.copy()))
-
-                        # clear for next block
-                        if_block.clear()
-                        used_variables.clear()
-            else:
-                refactored_lines.append(line)
+            # normal line, just keep it
+            # update brace depth
+            brace_depth += line.count("{")
+            brace_depth -= line.count("}")
+            refactored_lines.append(line)
+            i += 1
 
     return refactored_lines, extracted_functions
 
 
+def parse_full_if_else_structure(lines, start_index):
+    """
+    Reads from 'lines[start_index]' which should be an 'if(...) {'
+    (or 'else if(...)') until the entire matching if/else chain is complete.
+    
+    Returns:
+      block_lines: list of lines that constitute *all* of:
+        if(...) { ... } [ else if(...) { ... } ]* [ else { ... } ]?
+      end_index: the last index we used in 'lines'
+    """
+    block_lines = []
+    brace_count = 0
+    i = start_index
+    started = False
+    
+    while i < len(lines):
+        line = lines[i]
+        block_lines.append(line)
+        # check braces
+        opens = line.count("{")
+        closes = line.count("}")
+        brace_count += opens
+        brace_count -= closes
+
+        # once we see the first '{', we mark started
+        if opens > 0 and not started:
+            started = True
+
+        # if we've closed all braces
+        if started and brace_count <= 0:
+            # but we might see an immediate else or else if
+            # so let's peek next line, if it's "else {..." or "else if(...){"
+            # we keep going
+            if i + 1 < len(lines):
+                next_line = lines[i+1]
+                if re.match(r'\s*else\s*(?:if\s*\(|\{)', next_line):
+                    i += 1
+                    continue
+            
+            return block_lines, i
+        i += 1
+
+    # if we run out of lines, return what we have
+    return block_lines, i
+
+def compute_local_depth(block_lines):
+    """
+    Return how many net braces are in block_lines
+    (the maximum depth relative to block start, or a simpler measure).
+    For a more accurate approach, track the maximum running brace_count.
+    """
+    brace_count = 0
+    max_depth_in_block = 0
+    for ln in block_lines:
+        opens = ln.count("{")
+        closes = ln.count("}")
+        # increment first
+        for _ in range(opens):
+            brace_count += 1
+            max_depth_in_block = max(max_depth_in_block, brace_count)
+        # then decrement
+        for _ in range(closes):
+            brace_count -= 1
+    return max_depth_in_block
+
+def net_braces_in_block(block_lines):
+    """
+    Return net open braces minus close braces in entire block.
+    """
+    opens = sum(ln.count("{") for ln in block_lines)
+    closes = sum(ln.count("}") for ln in block_lines)
+    return opens - closes
+
 def generate_function_definitions(function_data):
     """
-    Build function definitions for each extracted if block.
-    Each function receives 'double *input' plus all needed 'double *varX',
-    plus 'double *output' if used.
+    Build function definitions for each extracted if block,
+    removing empty 'else { }' blocks in the process.
     """
+    # This regex looks for '} else { }' with only optional whitespace/newlines
+    # in between, and replaces it with a single '}' (thus removing the empty else).
+    empty_else_pattern = re.compile(r"\}\s*else\s*\{\s*\}", re.MULTILINE)
+
     defs = []
     for fn_name, block_lines, var_usage in function_data:
+        # Determine which var indices we need to pass to the function
         numeric_vars = sorted([v for v in var_usage if v.isdigit()])
         has_output = ('output' in var_usage)
 
-        # build param list
+        # Build function signature
         param_list_parts = []
         for v in numeric_vars:
             param_list_parts.append(f"double *var{v}")
@@ -180,19 +258,29 @@ def generate_function_definitions(function_data):
 
         fn_code = [signature]
 
+        # Indent the block lines inside the function
         fn_code_body = []
         for line in block_lines:
             fn_code_body.append("    " + line.strip() + "\n")
 
+        # Join all lines of function body
         body_text = "".join(fn_code_body)
+
+        # 1) Remove any empty 'else { }' blocks
+        body_text = empty_else_pattern.sub("}", body_text)
+
+        # 2) If there's a mismatch in braces, add closing braces
         open_braces = sum(l.count("{") for l in block_lines)
         close_braces = sum(l.count("}") for l in block_lines)
         while close_braces < open_braces:
             body_text += "}\n"
             close_braces += 1
 
+        # Assemble final function text
         fn_code.append(body_text)
         fn_code.append("}\n\n")
+
+        # Add to overall definitions
         defs.append("".join(fn_code))
 
     return defs
@@ -220,7 +308,7 @@ def create_proper_code(
     for line in lines:
         updated_lines.append(line)
 
-    refactored, extracted = split_deep_ifs(updated_lines, max_depth)
+    refactored, extracted = split_deep_if_else(updated_lines, max_depth)
 
     # 4) generate separate function definitions
     func_defs = generate_function_definitions(extracted)
@@ -258,8 +346,8 @@ def secondDropList(appender):
 
     return [emg1, emg2, emg3, pulse]
 
-# Runs the model
-def run_model_training():
+# Trains the model
+def create_model():
     # Load the data
     processed_data = pd.read_csv('processed_data.csv')
 
@@ -294,39 +382,50 @@ def run_model_training():
     print('Read the data')
     # Run the model
     model = train_model(X_train, y_train, X_test, y_test, feature_names)
-    
+
+    return model
+
+# Formats the code correctly
+def create_model_code(model):
     #Send the model to code
-    # code = m2c.export_to_c(model, function_name="predict")
-    # file_path = "modelCode.txt"
-    # with open(file_path, "w") as file:
-    #     file.write(code)
+    code = m2c.export_to_c(model, function_name="predict")
+    file_path = "modelCode.txt"
+    with open(file_path, "w") as file:
+        file.write(code)
 
-    # print("Model code created")
-    # output_file = "adjustedModelCode.txt"
+    print("Model code created")
+    output_file = "adjustedModelCode.txt"
 
-    # replacements = {
-    #     "(double[]){1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}": "defaultValues1",
-    #     "(double[]){0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}": "defaultValues2",
-    #     "(double[]){0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0}": "defaultValues3",
-    #     "(double[]){0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0}": "defaultValues4",
-    #     "(double[]){0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0}": "defaultValues5",
-    #     "(double[]){0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0}": "defaultValues6",
-    #     "(double[]){0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0}": "defaultValues7",
-    #     "(double[]){0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0}": "defaultValues8",
-    #     "#include <string.h>": "",
-    # }
+    replacements = {
+        "(double[]){1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}": "defaultValues1",
+        "(double[]){0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}": "defaultValues2",
+        "(double[]){0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0}": "defaultValues3",
+        "(double[]){0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0}": "defaultValues4",
+        "(double[]){0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0}": "defaultValues5",
+        "(double[]){0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0}": "defaultValues6",
+        "(double[]){0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0}": "defaultValues7",
+        "(double[]){0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0}": "defaultValues8",
+        "#include <string.h>": "",
+    }
 
-    # text_to_insert = ("double defaultValues1[8] = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};"+
-    #                 "\ndouble defaultValues2[8] = {0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};"+
-    #                 "\ndouble defaultValues3[8] = {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0};"+
-    #                 "\ndouble defaultValues4[8] = {0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0};"+
-    #                 "\ndouble defaultValues5[8] = {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0};"+
-    #                 "\ndouble defaultValues6[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0};"+
-    #                 "\ndouble defaultValues7[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0};"+
-    #                 "\ndouble defaultValues8[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0};\n")
+    text_to_insert = ("double defaultValues1[8] = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};"+
+                    "\ndouble defaultValues2[8] = {0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};"+
+                    "\ndouble defaultValues3[8] = {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0};"+
+                    "\ndouble defaultValues4[8] = {0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0};"+
+                    "\ndouble defaultValues5[8] = {0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0};"+
+                    "\ndouble defaultValues6[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0};"+
+                    "\ndouble defaultValues7[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0};"+
+                    "\ndouble defaultValues8[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0};\n")
 
-    # create_proper_code(file_path, replacements, output_file, text_to_insert)
-    # print("Model code adjusted")
+    create_proper_code(file_path, replacements, output_file, text_to_insert)
+    print("Model code adjusted")
 
+# Runs the model
+def run_model_training():
+    # Train the model
+    model = create_model()
+
+    # Make the code
+    create_model_code(model)
 
 run_model_training()
