@@ -20,7 +20,7 @@ double output[8];
 // For sequential samples
 int predVar = 0;
 int predVarCount = 0;
-const int MAX_PRED_VAR_COUNT = 10;
+const int MAX_PRED_VAR_COUNT = 4;
 
 // Shared data queue
 struct SharedData {
