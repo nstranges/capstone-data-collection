@@ -1,5 +1,53 @@
 #include <string.h>
 #include "helpers.h"
+#include <PID_v1.h>
+
+// The required setpoints for the positions
+double setpoints[8][3] = {
+    {0, 0, 0},  
+    {350, 0, 0},  
+    {0, 350, 0},  
+    {0, 0, 350},  
+    {350, 350, 0},  
+    {350, 0, 350},  
+    {0, 350, 350},  
+    {350, 350, 350}
+};
+
+// Flex pin attachments
+const int FLEX_PIN1 = 25;
+const int FLEX_PIN2 = 26;
+const int FLEX_PIN3 = 27;
+
+// Holds tuning values
+struct PIDParams {
+  double Kp;
+  double Ki;
+  double Kd;
+};
+
+// ADJUST USING THE MAP
+double setpoint1;
+double setpoint2;
+double setpoint3;
+
+// Input and output values
+double flexADC1;
+double motorPos1;
+double flexADC2;
+double motorPos2;
+double flexADC3;
+double motorPos3;
+
+// PID tuning values
+PIDParams pidParams1 = {5.884, 27.125, 0.0};
+PIDParams pidParams2 = {5.884, 27.125, 0.0};
+PIDParams pidParams3 = {5.884, 27.125, 0.0};
+
+// Create PID objects
+PID loop1(&flexADC1, &motorPos1, &setpoint1, pidParams1.Kp, pidParams1.Ki, pidParams1.Kd, DIRECT);
+PID loop2(&flexADC2, &motorPos2, &setpoint2, pidParams2.Kp, pidParams2.Ki, pidParams2.Kd, DIRECT);
+PID loop3(&flexADC3, &motorPos3, &setpoint3, pidParams3.Kp, pidParams3.Ki, pidParams3.Kd, DIRECT);
 
 // Pulse sensor
 int pulsePin = 4;
@@ -34,7 +82,10 @@ struct SharedData {
 const int NUM_SAMPLES = 15;
 SharedData samples[NUM_SAMPLES];
 int curSampleCount = 0;
+
+// Delay times in ms
 const int AVG_SAMPLE_TIME = 18;
+const int PID_CHANGE_TIME = 5;
 const int MODEL_DELAY_TIME = 1000;
 
 // Data for the feature engineering
@@ -51,21 +102,32 @@ volatile bool modelDone = false;
 volatile bool dataDone = false;
 volatile int modelOutput = 0;
 volatile bool modelDelay = false;
+volatile int pidCommand = 0;
 FeatEng features;
 
 // Data passing
 SemaphoreHandle_t featuresMutex;
 SemaphoreHandle_t modelFlagMutex;
-SemaphoreHandle_t dataFlagMutex;
 SemaphoreHandle_t outputMutex;
 SemaphoreHandle_t delayMutex;
 
 // Task declaration
 TaskHandle_t Task1;
 TaskHandle_t Task2;
+TaskHandle_t Task3;
 
 void setup(void) {
     Serial.begin(115200);
+
+    // Setting input pins
+    pinMode(FLEX_PIN1, INPUT);
+    pinMode(FLEX_PIN2, INPUT);
+    pinMode(FLEX_PIN3, INPUT);
+
+    // Enable PIDs
+    loop1.SetMode(AUTOMATIC);
+    loop2.SetMode(AUTOMATIC);
+    loop3.SetMode(AUTOMATIC);
 
     // Create semaphores
     featuresMutex = xSemaphoreCreateMutex();
@@ -77,12 +139,6 @@ void setup(void) {
     modelFlagMutex = xSemaphoreCreateMutex();
     if (modelFlagMutex == NULL) {
         Serial.println("Failed to create modelFlagMutex");
-        while (1);  // Halt the program
-    }
-
-    dataFlagMutex = xSemaphoreCreateMutex();
-    if (dataFlagMutex == NULL) {
-        Serial.println("Failed to create dataFlagMutex");
         while (1);  // Halt the program
     }
 
@@ -106,7 +162,17 @@ void setup(void) {
                     1,                      /* priority of the task */
                     &Task1,                 /* Task handle to keep track of created task */
                     0);                     /* pin task to core 0 */                  
-    delay(500); 
+    delay(250); 
+
+    xTaskCreatePinnedToCore(
+                    RunPIDs,                /* Task function. */
+                    "Running PIDs",         /* name of task. */
+                    10000,                  /* Stack size of task */
+                    NULL,                   /* parameter of the task */
+                    2,                      /* priority of the task */
+                    &Task3,                 /* Task handle to keep track of created task */
+                    0);                     /* pin task to core 0 */                  
+    delay(250);
 
     xTaskCreatePinnedToCore(
                     RunModel,               /* Task function. */
@@ -117,7 +183,7 @@ void setup(void) {
                     &Task2,                 /* Task handle to keep track of created task */
                     1);                     /* pin task to core 1 */
     
-    delay(500); 
+    delay(250); 
 }
 
 // Task that collects sensor data
@@ -171,7 +237,9 @@ void SensorCollection(void * pvParameters) {
 
                     if (predVarCount >= MAX_PRED_VAR_COUNT) {
                         predVarCount = 0;
-                        Serial.println(modelOutput);
+
+                        // Sending the commanded values to the PID
+                        pidCommand = modelOutput;
 
                         // Delaying to reduce jitters
                         if (xSemaphoreTake(delayMutex, portMAX_DELAY)) {
@@ -217,6 +285,35 @@ FeatEng calculateFeatures() {
     features.pulse[1] = calculateVariance(pulseBuffer, 15, features.pulse[0]);
 
     return features;
+}
+
+// Task for running all PID loops
+void RunPIDs(void * pvParameters) {
+    // Timing
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    TickType_t xFrequency = pdMS_TO_TICKS(AVG_SAMPLE_TIME);
+
+    while (1) {
+        // Compute PID 1
+        setpoint1 = setpoints[pidCommand][0];
+        flexADC1 = analogRead(FLEX_PIN1);
+        loop1.Compute();
+        /*SET THE MOTOR POSITION HERE*/
+
+        // Compute PID 2
+        setpoint2 = setpoints[pidCommand][1];
+        flexADC2 = analogRead(FLEX_PIN2);
+        loop2.Compute();
+        /*SET THE MOTOR POSITION HERE*/
+
+        // Compute PID 1
+        setpoint3 = setpoints[pidCommand][2];
+        flexADC3 = analogRead(FLEX_PIN3);
+        loop3.Compute();
+        /*SET THE MOTOR POSITION HERE*/
+
+        vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    }
 }
 
 // Task that collects sensor data
