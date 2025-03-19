@@ -1,9 +1,11 @@
 #include <string.h>
 #include "helpers.h"
 #include <PID_v1.h>
+#include "BluetoothSerial.h"
 
 // The required setpoints for the positions
-double setpoints[8][3] = {
+const int numMotors = 3;
+double setpoints[8][numMotors] = {
     {0, 0, 0},  
     {350, 0, 0},  
     {0, 350, 0},  
@@ -13,6 +15,9 @@ double setpoints[8][3] = {
     {0, 350, 350},  
     {350, 350, 350}
 };
+
+// The bluetooth serial module
+BluetoothSerial SerialBT;
 
 // Flex pin attachments
 const int FLEX_PIN1 = 25;
@@ -26,10 +31,12 @@ struct PIDParams {
   double Kd;
 };
 
-// ADJUST USING THE MAP
+// ADJUST USING THE MAP. Torque hold mode for grabbing stuff
 double setpoint1;
 double setpoint2;
 double setpoint3;
+bool torqueHoldMode[numMotors] = {false, false, false};
+int torqueThreshold = 0; // CHANGE THIS FROM TESTING
 
 // Input and output values
 double flexADC1;
@@ -118,6 +125,15 @@ TaskHandle_t Task3;
 
 void setup(void) {
     Serial.begin(115200);
+
+    // Enable bluetooth in master mode
+    SerialBT.begin("ESP32_Client", true);
+    if (SerialBT.connect("ESP32_Server")) {
+        Serial.println("Connected to ESP32_Server!");
+    } else {
+        Serial.println("Failed to connect. Check server Bluetooth.");
+        while (true);
+    }
 
     // Setting input pins
     pinMode(FLEX_PIN1, INPUT);
@@ -293,24 +309,80 @@ void RunPIDs(void * pvParameters) {
     TickType_t xLastWakeTime = xTaskGetTickCount();
     TickType_t xFrequency = pdMS_TO_TICKS(AVG_SAMPLE_TIME);
 
+    String sendData = "";
+    String gotData = "";
+    int overrideVals[numMotors] = {0, 0, 0};
+
+    int lastIndex = 0, index = 0;
+    int feedbackVals[numMotors*2];
+
     while (1) {
-        // Compute PID 1
-        setpoint1 = setpoints[pidCommand][0];
-        flexADC1 = analogRead(FLEX_PIN1);
-        loop1.Compute();
-        /*SET THE MOTOR POSITION HERE*/
+        // Clear the buffer of data
+        while (SerialBT.available()) {
+            gotData = SerialBT.read();
+        }
 
-        // Compute PID 2
-        setpoint2 = setpoints[pidCommand][1];
-        flexADC2 = analogRead(FLEX_PIN2);
-        loop2.Compute();
-        /*SET THE MOTOR POSITION HERE*/
+        // Check for extracted data
+        if (gotData != "") {
+            // Extract position and torque feedback
+            for (int i = 0; i < (numMotors*2); i++) {
+                int nextIndex = gotData.indexOf(',', lastIndex);
+                if (nextIndex == -1) nextIndex = gotData.length();
+                
+                feedbackVals[i] = gotData.substring(lastIndex, nextIndex).toInt();
+                lastIndex = nextIndex + 1;
+            }
 
-        // Compute PID 1
-        setpoint3 = setpoints[pidCommand][2];
-        flexADC3 = analogRead(FLEX_PIN3);
-        loop3.Compute();
-        /*SET THE MOTOR POSITION HERE*/
+            // Torque feedback check
+            // for (int i = 0; i < numMotors; i++) {
+            //     // Torque too high
+            //     if (abs(feedbackVals[i]) >= torqueThreshold) {
+            //         torqueHoldMode[i] = true;
+            //     }
+            // }
+        }
+        else {
+            for (int i = 0; i < numMotors; i++) {
+              torqueHoldMode[i] = false;
+            }
+        }
+
+        // Hold the current value if grabbing something
+        if (torqueHoldMode[0]) {
+            motorPos1 = feedbackVals[3];
+        }
+        else {
+            // Compute PID 1
+            setpoint1 = setpoints[pidCommand][0];
+            flexADC1 = analogRead(FLEX_PIN1);
+            loop1.Compute();
+        }
+
+        if (torqueHoldMode[1]) {
+            motorPos2 = feedbackVals[4];
+        }
+        else {
+            // Compute PID 2
+            setpoint2 = setpoints[pidCommand][1];
+            flexADC2 = analogRead(FLEX_PIN2);
+            loop2.Compute();
+        }
+
+        if (torqueHoldMode[2]) {
+            motorPos3 = feedbackVals[5];
+        }
+        else {
+            // Compute PID 3
+            setpoint3 = setpoints[pidCommand][2];
+            flexADC3 = analogRead(FLEX_PIN3);
+            loop3.Compute();
+        }
+        
+        // Sending the data over Bluetooth for motor command
+        sendData = String(motorPos1) + "," + String(motorPos2) + "," + String(motorPos3);
+        SerialBT.println(sendData);
+
+        gotData = "";
 
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
