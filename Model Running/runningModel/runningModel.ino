@@ -16,6 +16,19 @@ double setpoints[8][numMotors] = {
     {350, 350, 350}
 };
 
+// This is for the simple control mode
+// Fully closed is 1030deg. (4096/360)*1031 = 11,729 fully closed 
+double motContPositions[8][numMotors] = {
+    {0, 0, 0},  
+    {11729, 0, 0},  
+    {0, 11729, 0},  
+    {0, 0, 11729},  
+    {11729, 11729, 0},  
+    {11729, 0, 11729},  
+    {0, 11729, 11729},  
+    {11729, 11729, 11729}
+};
+
 // The bluetooth serial module
 BluetoothSerial SerialBT;
 
@@ -36,6 +49,7 @@ double setpoint1;
 double setpoint2;
 double setpoint3;
 bool torqueHoldMode[numMotors] = {false, false, false};
+bool pidMode = false;
 int torqueThreshold = 0; // CHANGE THIS FROM TESTING
 
 // Input and output values
@@ -316,73 +330,84 @@ void RunPIDs(void * pvParameters) {
     int lastIndex = 0, index = 0;
     int feedbackVals[numMotors*2];
 
-    while (1) {
-        // Clear the buffer of data
-        while (SerialBT.available()) {
-            gotData = SerialBT.read();
-        }
-
-        // Check for extracted data
-        if (gotData != "") {
-            // Extract position and torque feedback
-            for (int i = 0; i < (numMotors*2); i++) {
-                int nextIndex = gotData.indexOf(',', lastIndex);
-                if (nextIndex == -1) nextIndex = gotData.length();
-                
-                feedbackVals[i] = gotData.substring(lastIndex, nextIndex).toInt();
-                lastIndex = nextIndex + 1;
+    while (true) {
+        // Check if we want PID or not
+        if (pidMode) {
+            // Clear the buffer of data
+            while (SerialBT.available()) {
+                gotData = SerialBT.read();
             }
 
-            // Torque feedback check
-            // for (int i = 0; i < numMotors; i++) {
-            //     // Torque too high
-            //     if (abs(feedbackVals[i]) >= torqueThreshold) {
-            //         torqueHoldMode[i] = true;
-            //     }
-            // }
-        }
-        else {
-            for (int i = 0; i < numMotors; i++) {
-              torqueHoldMode[i] = false;
+            // Check for extracted data
+            if (gotData != "") {
+                // Extract position and torque feedback
+                for (int i = 0; i < (numMotors*2); i++) {
+                    int nextIndex = gotData.indexOf(',', lastIndex);
+                    if (nextIndex == -1) nextIndex = gotData.length();
+                    
+                    feedbackVals[i] = gotData.substring(lastIndex, nextIndex).toInt();
+                    lastIndex = nextIndex + 1;
+                }
+
+                // Torque feedback check
+                // for (int i = 0; i < numMotors; i++) {
+                //     // Torque too high
+                //     if (abs(feedbackVals[i]) >= torqueThreshold) {
+                //         torqueHoldMode[i] = true;
+                //     }
+                // }
             }
-        }
+            else {
+                for (int i = 0; i < numMotors; i++) {
+                torqueHoldMode[i] = false;
+                }
+            }
 
-        // Hold the current value if grabbing something
-        if (torqueHoldMode[0]) {
-            motorPos1 = feedbackVals[3];
+            // Hold the current value if grabbing something
+            if (torqueHoldMode[0]) {
+                motorPos1 = feedbackVals[3];
+            }
+            else {
+                // Compute PID 1
+                setpoint1 = setpoints[pidCommand][0];
+                flexADC1 = analogRead(FLEX_PIN1);
+                loop1.Compute();
+            }
+
+            if (torqueHoldMode[1]) {
+                motorPos2 = feedbackVals[4];
+            }
+            else {
+                // Compute PID 2
+                setpoint2 = setpoints[pidCommand][1];
+                flexADC2 = analogRead(FLEX_PIN2);
+                loop2.Compute();
+            }
+
+            if (torqueHoldMode[2]) {
+                motorPos3 = feedbackVals[5];
+            }
+            else {
+                // Compute PID 3
+                setpoint3 = setpoints[pidCommand][2];
+                flexADC3 = analogRead(FLEX_PIN3);
+                loop3.Compute();
+            }
+
+            gotData = "";
+            
         }
         else {
-            // Compute PID 1
-            setpoint1 = setpoints[pidCommand][0];
-            flexADC1 = analogRead(FLEX_PIN1);
-            loop1.Compute();
+            // Setting the motors directly to the wanted positions
+            motorPos1 = motContPositions[pidCommand][0];
+            motorPos2 = motContPositions[pidCommand][1];
+            motorPos3 = motContPositions[pidCommand][2];
         }
 
-        if (torqueHoldMode[1]) {
-            motorPos2 = feedbackVals[4];
-        }
-        else {
-            // Compute PID 2
-            setpoint2 = setpoints[pidCommand][1];
-            flexADC2 = analogRead(FLEX_PIN2);
-            loop2.Compute();
-        }
-
-        if (torqueHoldMode[2]) {
-            motorPos3 = feedbackVals[5];
-        }
-        else {
-            // Compute PID 3
-            setpoint3 = setpoints[pidCommand][2];
-            flexADC3 = analogRead(FLEX_PIN3);
-            loop3.Compute();
-        }
-        
         // Sending the data over Bluetooth for motor command
         sendData = String(motorPos1) + "," + String(motorPos2) + "," + String(motorPos3);
         SerialBT.println(sendData);
-
-        gotData = "";
+        
 
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }

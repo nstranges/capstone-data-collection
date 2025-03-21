@@ -96,12 +96,12 @@ const unsigned long interval = 10;
 const int numMotors = 3;
 
 // Converting position to wanted value
-int convFactor = 11; // Estimated 4096/360
-bool motorMode = false;
+int convFactor = 1; //11; // Estimated 4096/360 (one for now to do this)
+bool motorMode[numMotors] = {false, false, false};
 int wantedPos = 0;
 int maxPosVal = 4096;
 int rotCount = 0;
-bool goingUp = true;
+bool pidMode = false;
 int totalPosition[numMotors] = {0};
 int lastRawPos[numMotors] = {0};
 int turnCount[numMotors] = {0}; 
@@ -165,74 +165,7 @@ void loop() {
   if (currentMillis - previousMillis >= interval) {
     previousMillis = currentMillis;
 
-    if (wantedPos >= maxPosVal) {
-      // Switch and move to motor mode
-      for (int i = 0; i < numMotors; i++) {
-        int rawPos = st.ReadPos(ID[i]);
-
-        if (rawPos < 100 && lastRawPos[i] > 4000) { 
-            turnCount[i]++;
-        } 
-        else if (rawPos > 4000 && lastRawPos[i] < 100) { 
-            turnCount[i]--;
-        }
-
-        lastRawPos[i] = rawPos;
-        totalPosition[i] = (turnCount[i] * 4096) + rawPos;
-      }
-
-      // Move it
-      for (int i = 0; i < numMotors; i++) {
-        // Motor mode
-        if (!motorMode) {
-          st.unLockEprom(ID[i]);
-          st.writeByte(ID[i], SMS_STS_MODE, 1);
-          st.LockEprom(ID[i]);
-        }
-
-        int lastPos = totalPosition[i];
-        if (wantedPos > lastPos) {
-          contSpeed[i] = 800;
-        }
-        else if (wantedPos < lastPos){
-          contSpeed[i] = -800;
-        }
-        else {
-          contSpeed[i] = 0;
-        }
-
-        st.WriteSpe(ID[i], contSpeed[i]);
-      }
-
-      motorMode = true;
-    }
-    else if (wantedPos < maxPosVal) {
-      for (int i = 0; i < numMotors; i++) {
-        Position[i] = wantedPos;
-        // Servo mode
-        if (motorMode) {
-          st.unLockEprom(ID[i]);
-          st.writeByte(ID[i], SMS_STS_MODE, 0);
-          st.LockEprom(ID[i]);
-        }
-      }
-      
-      motorMode = false;
-      // Write
-      st.SyncWritePosEx(ID, 3, Position, Speed, ACC);
-    }
-
-    if (rotCount >= 5000) { 
-        rotCount = 0;
-        goingUp = !goingUp;
-    }
-
-    wantedPos += (goingUp ? 5 : -5);
-
-    rotCount++;
-    Serial.println(wantedPos);
-
-    /*if (SerialBT.available()) {
+    if (SerialBT.available()) {
       gotData = SerialBT.read();
 
       if (gotData != "") {
@@ -241,29 +174,86 @@ void loop() {
           int nextIndex = gotData.indexOf(',', lastIndex);
           if (nextIndex == -1) nextIndex = gotData.length();
           
-          feedbackVals[i] = gotData.substring(lastIndex, nextIndex);
+          feedbackVals[i] = gotData.substring(lastIndex, nextIndex).toInt();
           lastIndex = nextIndex + 1;
         }
 
-        // Change the positions of the servos
         for (int i = 0; i < numMotors; i++) {
-          Position[i] = feedbackVals[i].toInt() * convFactor;
-        }
-        // Write
-        st.SyncWritePosEx(ID, 3, Position, Speed, ACC);
 
-        // Reading the feedback of the servos
-        for (int i = 0; i < numMotors; i++) {
-          loadFbk[i] = st.ReadLoad(i+1);
-          sendData = sendData + "," + String(loadFbk[i]);
-          posFbk[i] = st.ReadPos(i+1);
-          sendData = sendData + "," + String(posFbk[i]);
-        }
+          // Go into motor mode
+          if (feedbackVals[i] >= maxPosVal) {
+            int rawPos = st.ReadPos(ID[i]);
 
-        // Sending the response back
-        SerialBT.println(sendData);
+            if (rawPos < 100 && lastRawPos[i] > 4000) { 
+                turnCount[i]++;
+            } 
+            else if (rawPos > 4000 && lastRawPos[i] < 100) { 
+                turnCount[i]--;
+            }
+
+            lastRawPos[i] = rawPos;
+            totalPosition[i] = (turnCount[i] * 4096) + rawPos;
+
+            // Motor mode
+            if (!motorMode[i]) {
+              st.unLockEprom(ID[i]);
+              st.writeByte(ID[i], SMS_STS_MODE, 1);
+              st.LockEprom(ID[i]);
+            }
+
+            int lastPos = totalPosition[i];
+            if (feedbackVals[i] > lastPos) {
+              contSpeed[i] = 800;
+            }
+            else if (feedbackVals[i] < lastPos){
+              contSpeed[i] = -800;
+            }
+            else {
+              contSpeed[i] = 0;
+            }
+
+            st.WriteSpe(ID[i], contSpeed[i]);
+
+            motorMode[i] = true;
+          }
+          else if (feedbackVals[i] < maxPosVal) {
+
+            Position[i] = feedbackVals[i];
+            // Servo mode
+            if (motorMode[i]) {
+              st.unLockEprom(ID[i]);
+              st.writeByte(ID[i], SMS_STS_MODE, 0);
+              st.LockEprom(ID[i]);
+            }
+            
+            motorMode[i] = false;
+            // Write
+            st.SyncWritePosEx(ID, 3, Position, Speed, ACC);
+          }
+        }
+        
+        // If we want to give feedback to the PID loop
+        if (pidMode) {
+          // Reading the feedback of the servos
+          for (int i = 0; i < numMotors; i++) {
+            loadFbk[i] = st.ReadLoad(i+1);
+            sendData = sendData + "," + String(loadFbk[i]);
+
+            if (motorMode[i]) {
+              posFbk[i] = totalPosition[i];
+            }
+            else {
+              posFbk[i] = st.ReadPos(i+1);
+            }
+            
+            sendData = sendData + "," + String(posFbk[i]);
+          }
+
+          // Sending the response back
+          SerialBT.println(sendData);
+        }
       }
-    }*/
+    }
   }
 }
 
