@@ -5,7 +5,8 @@
 
 // The required setpoints for the positions
 const int numMotors = 3;
-double setpoints[8][numMotors] = {
+const int numClasses = 8;
+double setpoints[numClasses][numMotors] = {
     {0, 0, 0},  
     {350, 0, 0},  
     {0, 350, 0},  
@@ -18,7 +19,7 @@ double setpoints[8][numMotors] = {
 
 // This is for the simple control mode
 // Fully closed is 1030deg. (4096/360)*1031 = 11,729 fully closed 
-double motContPositions[8][numMotors] = {
+double motContPositions[numClasses][numMotors] = {
     {0, 0, 0},  
     {11729, 0, 0},  
     {0, 11729, 0},  
@@ -44,12 +45,17 @@ struct PIDParams {
   double Kd;
 };
 
-// ADJUST USING THE MAP. Torque hold mode for grabbing stuff
+// Torque hold mode for grabbing stuff
 double setpoint1;
 double setpoint2;
 double setpoint3;
 bool torqueHoldMode[numMotors] = {false, false, false};
 bool pidMode = false;
+bool modelInference = false;
+int curModelTestOut = 0;
+int modelTestOutCount = 0;
+int secondsToHoldTest = 5;
+bool backToHomePos = true;
 int torqueThreshold = 0; // CHANGE THIS FROM TESTING
 
 // Input and output values
@@ -83,8 +89,8 @@ int emgPin3 = 13;
 int rawEmg3;
 
 // Prediction params
-double input[8];
-double output[8];
+double input[numClasses];
+double output[numClasses];
 
 // For sequential samples
 int predVar = 0;
@@ -432,8 +438,16 @@ void RunModel(void * pvParameters) {
         // Changing the delay time
         if (delayTheModel) {
             xFrequency = pdMS_TO_TICKS(MODEL_DELAY_TIME);
+
+            // If not in model inference mode
+            if (!modelInference) {
+                // Counting seconds in this position
+                if (modelTestOutCount < secondsToHoldTest) {
+                    modelTestOutCount++;
+                }
+            }
         }
-        else{
+        else {
             // Setting the regular frequency
             xFrequency = pdMS_TO_TICKS(AVG_SAMPLE_TIME); 
 
@@ -450,19 +464,49 @@ void RunModel(void * pvParameters) {
 
                 xSemaphoreGive(featuresMutex);
             }
-            
-            // Predict with the model
-            predict(input, output);
 
-            // Output the results
+            // Model output val
             int maxIndex = 0;
-            float maxVal = 0;
-            for (int i = 0; i < 8; i++) {
-                if (output[i] > maxVal) {
-                    maxIndex = i;
-                    maxVal = output[i];
+
+            // Running the model or not
+            if (modelInference) {
+                // Predict with the model
+                predict(input, output);
+
+                // Output the results
+                float maxVal = 0;
+                for (int i = 0; i < numClasses; i++) {
+                    if (output[i] > maxVal) {
+                        maxIndex = i;
+                        maxVal = output[i];
+                    }
                 }
             }
+            else {
+                // Held for 5, reset
+                if (modelTestOutCount >= secondsToHoldTest) {
+                    // Flip home position trigger
+                    backToHomePos = !backToHomePos;
+
+                    // Reset this
+                    if (modelTestOutCount >= 8) {
+                        modelTestOutCount = 0;
+                    }
+                    else {
+                        modelTestOutCount++;
+                    }
+                    
+                }
+
+                // Home or other position
+                if (!backToHomePos) {
+                    maxIndex = curModelTestOut;
+                }
+                else {
+                    maxIndex = 0;
+                }
+            }
+            
 
             if (xSemaphoreTake(modelFlagMutex, portMAX_DELAY)) {
                 modelDone = true;
