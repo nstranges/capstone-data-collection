@@ -112,8 +112,8 @@ int curSampleCount = 0;
 
 // Delay times in ms
 const int AVG_SAMPLE_TIME = 18;
-const int PID_CHANGE_TIME = 5;
-const int MODEL_DELAY_TIME = 1000;
+const int PID_CHANGE_TIME = 2;
+const int MODEL_DELAY_TIME = 5000;
 
 // Data for the feature engineering
 // The array is avg, var
@@ -279,7 +279,10 @@ void SensorCollection(void * pvParameters) {
 
                         // Delaying to reduce jitters
                         if (xSemaphoreTake(delayMutex, portMAX_DELAY)) {
-                            modelDelay = true;
+                            if (!modelDelay) {
+                              modelDelay = true;
+                              Serial.println("Delaying the model");
+                            }
 
                             xSemaphoreGive(delayMutex);
                         }
@@ -341,7 +344,7 @@ void RunPIDs(void * pvParameters) {
         if (pidMode) {
             // Clear the buffer of data
             while (SerialBT.available()) {
-                gotData = SerialBT.read();
+                gotData = SerialBT.readStringUntil('\n');
             }
 
             // Check for extracted data
@@ -413,8 +416,8 @@ void RunPIDs(void * pvParameters) {
         // Sending the data over Bluetooth for motor command
         sendData = String(motorPos1) + "," + String(motorPos2) + "," + String(motorPos3);
         SerialBT.println(sendData);
+        Serial.println(sendData);
         
-
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }
@@ -437,7 +440,8 @@ void RunModel(void * pvParameters) {
 
         // Changing the delay time
         if (delayTheModel) {
-            xFrequency = pdMS_TO_TICKS(MODEL_DELAY_TIME);
+            // Blocking but on its own core
+            delay(MODEL_DELAY_TIME);
 
             // If not in model inference mode
             if (!modelInference) {
@@ -485,15 +489,18 @@ void RunModel(void * pvParameters) {
             else {
                 // Held for 5, reset
                 if (modelTestOutCount >= secondsToHoldTest) {
+
+                    modelTestOutCount = 0;
+                    
                     // Flip home position trigger
                     backToHomePos = !backToHomePos;
 
-                    // Reset this
-                    if (modelTestOutCount >= 8) {
-                        modelTestOutCount = 0;
+                    // Reset the position
+                    if (curModelTestOut >= numClasses) {
+                        curModelTestOut = 0;
                     }
                     else {
-                        modelTestOutCount++;
+                        curModelTestOut++;
                     }
                     
                 }

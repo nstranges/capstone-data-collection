@@ -119,6 +119,8 @@ void setup() {
   Serial.begin(115200);
   while(!Serial) {}
 
+  SerialBT.begin("ESP32_Server");
+
   // For the motor communication
   MySerial.begin(1000000, SERIAL_8N1, S_RXD, S_TXD);
   st.pSerial = &MySerial;
@@ -166,7 +168,8 @@ void loop() {
     previousMillis = currentMillis;
 
     if (SerialBT.available()) {
-      gotData = SerialBT.read();
+      // Read values as a String
+      gotData = SerialBT.readStringUntil('\n');
 
       if (gotData != "") {
         // Extract position and torque feedback
@@ -177,6 +180,11 @@ void loop() {
           feedbackVals[i] = gotData.substring(lastIndex, nextIndex).toInt();
           lastIndex = nextIndex + 1;
         }
+
+        Serial.println(feedbackVals[0]);
+        Serial.println(feedbackVals[1]);
+        Serial.println(feedbackVals[2]);
+        Serial.println();
 
         for (int i = 0; i < numMotors; i++) {
 
@@ -203,10 +211,10 @@ void loop() {
 
             int lastPos = totalPosition[i];
             if (feedbackVals[i] > lastPos) {
-              contSpeed[i] = 800;
+              contSpeed[i] = 3400;
             }
             else if (feedbackVals[i] < lastPos){
-              contSpeed[i] = -800;
+              contSpeed[i] = -3400;
             }
             else {
               contSpeed[i] = 0;
@@ -252,6 +260,12 @@ void loop() {
           // Sending the response back
           SerialBT.println(sendData);
         }
+      }
+      else {
+        for (int i = 0; i < numMotors; i++) {
+          Position[i] = 0;
+        }
+        st.SyncWritePosEx(ID, 3, Position, Speed, ACC);
       }
     }
   }
