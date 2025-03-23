@@ -153,6 +153,10 @@ void setup() {
     ID[i] = i+1;   // Save the ID
     Speed[i] = 3400;  // Set the servo speed
     ACC[i] = 100;   // Set the start/stop acceleration. The smaller the value, the lower the acceleration. The maximum value that can be set is 150.
+
+    st.unLockEprom(ID[i]);
+    st.writeByte(ID[i], SMS_STS_MODE, 1);
+    st.LockEprom(ID[i]);
   }
 }
 
@@ -177,67 +181,31 @@ void loop() {
           int nextIndex = gotData.indexOf(',', lastIndex);
           if (nextIndex == -1) nextIndex = gotData.length();
           
-          feedbackVals[i] = gotData.substring(lastIndex, nextIndex).toInt();
+          // Negative to accomodate motor mount orientation
+          feedbackVals[i] = -(gotData.substring(lastIndex, nextIndex).toInt());
           lastIndex = nextIndex + 1;
         }
 
-        Serial.println(feedbackVals[0]);
-        Serial.println(feedbackVals[1]);
-        Serial.println(feedbackVals[2]);
-        Serial.println();
-
         for (int i = 0; i < numMotors; i++) {
-
-          // Go into motor mode
-          if (feedbackVals[i] >= maxPosVal) {
             int rawPos = st.ReadPos(ID[i]);
-
-            if (rawPos < 100 && lastRawPos[i] > 4000) { 
-                turnCount[i]++;
-            } 
-            else if (rawPos > 4000 && lastRawPos[i] < 100) { 
+            int delta = rawPos - lastRawPos[i];
+        
+            // Handle wraparound
+            if (delta > 3000) {
                 turnCount[i]--;
+            } else if (delta < -3000) {
+                turnCount[i]++;
             }
-
+        
+            totalPosition[i] = turnCount[i] * 4096 + rawPos;
             lastRawPos[i] = rawPos;
-            totalPosition[i] = (turnCount[i] * 4096) + rawPos;
-
-            // Motor mode
-            if (!motorMode[i]) {
-              st.unLockEprom(ID[i]);
-              st.writeByte(ID[i], SMS_STS_MODE, 1);
-              st.LockEprom(ID[i]);
-            }
-
-            int lastPos = totalPosition[i];
-            if (feedbackVals[i] > lastPos) {
-              contSpeed[i] = 3400;
-            }
-            else if (feedbackVals[i] < lastPos){
-              contSpeed[i] = -3400;
-            }
-            else {
-              contSpeed[i] = 0;
-            }
-
+        
+            // Proportional speed control
+            int error = feedbackVals[i] - totalPosition[i];
+            contSpeed[i] = constrain(error * 2, -3400, 3400);
+            if (abs(error) < 5) contSpeed[i] = 0;
+        
             st.WriteSpe(ID[i], contSpeed[i]);
-
-            motorMode[i] = true;
-          }
-          else if (feedbackVals[i] < maxPosVal) {
-
-            Position[i] = feedbackVals[i];
-            // Servo mode
-            if (motorMode[i]) {
-              st.unLockEprom(ID[i]);
-              st.writeByte(ID[i], SMS_STS_MODE, 0);
-              st.LockEprom(ID[i]);
-            }
-            
-            motorMode[i] = false;
-            // Write
-            st.SyncWritePosEx(ID, 3, Position, Speed, ACC);
-          }
         }
         
         // If we want to give feedback to the PID loop

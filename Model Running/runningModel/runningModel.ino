@@ -52,7 +52,7 @@ double setpoint3;
 bool torqueHoldMode[numMotors] = {false, false, false};
 bool pidMode = false;
 bool modelInference = false;
-int curModelTestOut = 0;
+int curModelTestOut = 1;
 int modelTestOutCount = 0;
 int secondsToHoldTest = 5;
 bool backToHomePos = true;
@@ -113,7 +113,7 @@ int curSampleCount = 0;
 // Delay times in ms
 const int AVG_SAMPLE_TIME = 18;
 const int PID_CHANGE_TIME = 2;
-const int MODEL_DELAY_TIME = 5000;
+const int MODEL_DELAY_TIME = 1000;
 
 // Data for the feature engineering
 // The array is avg, var
@@ -452,9 +452,6 @@ void RunModel(void * pvParameters) {
             }
         }
         else {
-            // Setting the regular frequency
-            xFrequency = pdMS_TO_TICKS(AVG_SAMPLE_TIME); 
-
             // Format input
             if (xSemaphoreTake(featuresMutex, portMAX_DELAY)) {
                 int sampleIndex = 0;
@@ -487,22 +484,17 @@ void RunModel(void * pvParameters) {
                 }
             }
             else {
-                // Held for 5, reset
+                // Held then reset
                 if (modelTestOutCount >= secondsToHoldTest) {
 
                     modelTestOutCount = 0;
-                    
-                    // Flip home position trigger
-                    backToHomePos = !backToHomePos;
-
-                    // Reset the position
-                    if (curModelTestOut >= numClasses) {
-                        curModelTestOut = 0;
-                    }
-                    else {
+    
+                    if (!backToHomePos) {
                         curModelTestOut++;
+                        if (curModelTestOut >= numClasses) curModelTestOut = 1;
                     }
-                    
+             
+                    backToHomePos = !backToHomePos;
                 }
 
                 // Home or other position
@@ -514,7 +506,7 @@ void RunModel(void * pvParameters) {
                 }
             }
             
-
+            // Showing that the model is done
             if (xSemaphoreTake(modelFlagMutex, portMAX_DELAY)) {
                 modelDone = true;
 
