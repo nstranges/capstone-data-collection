@@ -67,9 +67,9 @@ double flexADC3;
 double motorPos3;
 
 // PID tuning values
-PIDParams pidParams1 = {4.8322, 17.665, 0.0};
-PIDParams pidParams2 = {4.8322, 17.665, 0.0};
-PIDParams pidParams3 = {4.8322, 17.665, 0.0};
+PIDParams pidParams1 = {5.146, 17.4956, 0.0};
+PIDParams pidParams2 = {5.146, 17.4956, 0.0};
+PIDParams pidParams3 = {5.146, 17.4956, 0.0};
 
 // Create PID objects
 PID loop1(&flexADC1, &motorPos1, &setpoint1, pidParams1.Kp, pidParams1.Ki, pidParams1.Kd, DIRECT);
