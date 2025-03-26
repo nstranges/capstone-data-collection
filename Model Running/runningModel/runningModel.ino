@@ -2,10 +2,17 @@
 #include "helpers.h"
 #include <PID_v1.h>
 #include "BluetoothSerial.h"
+#include <Filters.h>
+
+// For the butterworth filter
+FilterTwoPole filters[4];
+float cutoffHz = 20.0;
+float initialValue = 0.0;
 
 // The required setpoints for the positions
 const int numMotors = 3;
 const int numClasses = 8;
+const int numFeaturesAdded = 4;
 double setpoints[numClasses][numMotors] = {
     {0, 0, 0},  
     {350, 0, 0},  
@@ -51,7 +58,7 @@ double setpoint2;
 double setpoint3;
 bool torqueHoldMode[numMotors] = {false, false, false};
 bool pidMode = false;
-bool modelInference = false;
+bool modelInference = true;
 int curModelTestOut = 1;
 int modelTestOutCount = 0;
 int secondsToHoldTest = 5;
@@ -89,13 +96,14 @@ int emgPin3 = 13;
 int rawEmg3;
 
 // Prediction params
-double input[numClasses];
-double output[numClasses];
+const int inputSize = 4*numFeaturesAdded;
+double modelInput[inputSize];
+double modelOutput[numClasses];
 
 // For sequential samples
 int predVar = 0;
 int predVarCount = 0;
-const int MAX_PRED_VAR_COUNT = 10;
+const int MAX_PRED_VAR_COUNT = 2;
 
 // Shared data queue
 struct SharedData {
@@ -113,21 +121,21 @@ int curSampleCount = 0;
 // Delay times in ms
 const int AVG_SAMPLE_TIME = 18;
 const int PID_CHANGE_TIME = 2;
-const int MODEL_DELAY_TIME = 1000;
+const int MODEL_DELAY_TIME = 2000;
 
 // Data for the feature engineering
 // The array is avg, var
 struct FeatEng {
-    double emg1[2];
-    double emg2[2];
-    double emg3[2];
-    double pulse[2];
+    double emg1[numFeaturesAdded];
+    double emg2[numFeaturesAdded];
+    double emg3[numFeaturesAdded];
+    double pulse[numFeaturesAdded];
 };
 
 // For the model results
 volatile bool modelDone = false;
 volatile bool dataDone = false;
-volatile int modelOutput = 0;
+volatile int modelResult = 0;
 volatile bool modelDelay = false;
 volatile int pidCommand = 0;
 FeatEng features;
@@ -213,7 +221,7 @@ void setup(void) {
     xTaskCreatePinnedToCore(
                     RunModel,               /* Task function. */
                     "Model Running",        /* name of task. */
-                    10000,                  /* Stack size of task */
+                    20000,                  /* Stack size of task */
                     NULL,                   /* parameter of the task */
                     1,                      /* priority of the task */
                     &Task2,                 /* Task handle to keep track of created task */
@@ -263,11 +271,11 @@ void SensorCollection(void * pvParameters) {
                 // Getting the model output
                 if (xSemaphoreTake(outputMutex, portMAX_DELAY)) {
                     // Can transmit data here
-                    if (modelOutput == predVar) {
+                    if (modelResult == predVar) {
                         predVarCount++;
                     }
                     else {
-                        predVar = modelOutput;
+                        predVar = modelResult;
                         predVarCount = 0;
                     }
 
@@ -275,7 +283,7 @@ void SensorCollection(void * pvParameters) {
                         predVarCount = 0;
 
                         // Sending the commanded values to the PID
-                        pidCommand = modelOutput;
+                        pidCommand = modelResult;
 
                         // Delaying to reduce jitters
                         if (xSemaphoreTake(delayMutex, portMAX_DELAY)) {
@@ -297,31 +305,47 @@ void SensorCollection(void * pvParameters) {
     }
 }
 
+// Resetting the main filter
+void resetFilter(int index) {filters[index].setAsFilter(LOWPASS_BUTTERWORTH, cutoffHz, initialValue);}
+
 // Calculating the extra features
 FeatEng calculateFeatures() {
     FeatEng features;
 
+    // Reset all filters
+    for (int i = 0; i < 4; i++) {
+        resetFilter(i);
+    }
+
     // Buffers for the calculations
     int emg1Buffer[15], emg2Buffer[15], emg3Buffer[15], pulseBuffer[15];
     for (int i = 0; i < 15; i++) {
-        emg1Buffer[i] = samples[i].emg1;
-        emg2Buffer[i] = samples[i].emg2;
-        emg3Buffer[i] = samples[i].emg3;
-        pulseBuffer[i] = samples[i].pulse;
+        emg1Buffer[i] = filters[0].input(samples[i].emg1);
+        emg2Buffer[i] = filters[1].input(samples[i].emg2);
+        emg3Buffer[i] = filters[2].input(samples[i].emg3);
+        pulseBuffer[i] = filters[3].input(samples[i].pulse);
     }
 
     // Each feature prep
     features.emg1[0] = calculateAverage(emg1Buffer, 15);
     features.emg1[1] = calculateVariance(emg1Buffer, 15, features.emg1[0]);
+    features.emg1[2] = calculateFirstDerivative(emg1Buffer, 15, 0.015);
+    features.emg1[3] = calculateSecondDerivative(emg1Buffer, 15, 0.015);
 
     features.emg2[0] = calculateAverage(emg2Buffer, 15);
     features.emg2[1] = calculateVariance(emg2Buffer, 15, features.emg2[0]);
+    features.emg2[2] = calculateFirstDerivative(emg2Buffer, 15, 0.015);
+    features.emg2[3] = calculateSecondDerivative(emg2Buffer, 15, 0.015);
 
     features.emg3[0] = calculateAverage(emg3Buffer, 15);
     features.emg3[1] = calculateVariance(emg3Buffer, 15, features.emg3[0]);
+    features.emg3[2] = calculateFirstDerivative(emg3Buffer, 15, 0.015);
+    features.emg3[3] = calculateSecondDerivative(emg3Buffer, 15, 0.015);
 
     features.pulse[0] = calculateAverage(pulseBuffer, 15);
     features.pulse[1] = calculateVariance(pulseBuffer, 15, features.pulse[0]);
+    features.pulse[2] = calculateFirstDerivative(pulseBuffer, 15, 0.015);
+    features.pulse[3] = calculateSecondDerivative(pulseBuffer, 15, 0.015);
 
     return features;
 }
@@ -455,11 +479,11 @@ void RunModel(void * pvParameters) {
             // Format input
             if (xSemaphoreTake(featuresMutex, portMAX_DELAY)) {
                 int sampleIndex = 0;
-                for (int i = 0; i < 8; i += 4) {
-                    input[i] = features.emg1[sampleIndex];
-                    input[i+1] = features.emg2[sampleIndex];
-                    input[i+2] = features.emg3[sampleIndex];
-                    input[i+3] = features.pulse[sampleIndex];
+                for (int i = 0; i < (4*numFeaturesAdded); i += 4) {
+                    modelInput[i] = features.emg1[sampleIndex];
+                    modelInput[i+1] = features.emg2[sampleIndex];
+                    modelInput[i+2] = features.emg3[sampleIndex];
+                    modelInput[i+3] = features.pulse[sampleIndex];
                     sampleIndex++;
                 }
 
@@ -472,14 +496,14 @@ void RunModel(void * pvParameters) {
             // Running the model or not
             if (modelInference) {
                 // Predict with the model
-                predict(input, output);
+                predict(modelInput, modelOutput);
 
                 // Output the results
                 float maxVal = 0;
                 for (int i = 0; i < numClasses; i++) {
-                    if (output[i] > maxVal) {
+                    if (modelOutput[i] > maxVal) {
                         maxIndex = i;
-                        maxVal = output[i];
+                        maxVal = modelOutput[i];
                     }
                 }
             }
@@ -512,7 +536,7 @@ void RunModel(void * pvParameters) {
 
                 // Getting the model output
                 if (xSemaphoreTake(outputMutex, portMAX_DELAY)) {
-                    modelOutput = maxIndex;
+                    modelResult = maxIndex;
 
                     xSemaphoreGive(outputMutex);
                 }
@@ -537,6 +561,27 @@ float calculateVariance(int buffer[], int size, float avg) {
 		sumSq += pow(buffer[i] - avg, 2);
 	}
 	return sumSq / size;
+}
+
+float calculateFirstDerivative(int buffer[], int size, float dt) {
+	if (size < 2) return 0;
+
+	float sum = 0;
+	for (int i = 1; i < size; i++) {
+		sum += (buffer[i] - buffer[i - 1]) / dt;
+	}
+	return sum / (size - 1);
+}
+
+float calculateSecondDerivative(int buffer[], int size, float dt) {
+	if (size < 3) return 0;
+
+	float sum = 0;
+	for (int i = 1; i < size - 1; i++) {
+		float accel = (buffer[i + 1] - 2 * buffer[i] + buffer[i - 1]) / (dt * dt);
+		sum += accel;
+	}
+	return sum / (size - 2);
 }
 
 void loop() {

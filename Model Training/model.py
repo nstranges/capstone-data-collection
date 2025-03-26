@@ -12,7 +12,7 @@ def train_model(X_train, y_train, X_test, y_test, feature_names):
     rf_model = RandomForestClassifier(
         verbose=1,
         n_jobs=-1,
-        n_estimators=30, #try 50 # was 100
+        n_estimators=100, #try 50 # was 100
         #max_depth = 10, #default is none
         #max_features=3, # Fewer features per split, less memory
         random_state=42
@@ -321,7 +321,11 @@ def create_proper_code(
     includes = '#include "helpers.h"\n#include <cstring>\n#include <string.h>\n' + text_to_insert
     final_code = includes + final_code
 
-    # 7) write
+    # 7) Changing the variable names
+    final_code = final_code.replace('input', 'modelInput')
+    final_code = final_code.replace('output', 'modelOutput')
+
+    # 8) write
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(final_code)
 
@@ -367,8 +371,8 @@ def create_model():
     processed_data = processed_data.drop(columns=secondDropList('rms'))
     processed_data = processed_data.drop(columns=makeDropList('first_derivative'))
     processed_data = processed_data.drop(columns=makeDropList('second_derivative'))
-    processed_data = processed_data.drop(columns=secondDropList('first_derivative'))
-    processed_data = processed_data.drop(columns=secondDropList('second_derivative'))
+    #processed_data = processed_data.drop(columns=secondDropList('first_derivative'))
+    #processed_data = processed_data.drop(columns=secondDropList('second_derivative'))
 
     # Separate data
     X = processed_data.drop(columns=['Position']).values

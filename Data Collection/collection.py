@@ -90,7 +90,7 @@ def readserial(comport, baudrate, datapoints=60):
 
 # Data Collection loop
 def collection(orientations_per_pos=1):
-    serial_port = 'COM3'
+    serial_port = 'COM4'
     baud_rate = 115200
 
     # Define the positions and corresponding images

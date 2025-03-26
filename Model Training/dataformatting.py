@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from scipy.signal import butter, lfilter
 
 def create_sliding_windows(data, window_size, step_size):
     windows = []
@@ -16,10 +17,43 @@ def create_sliding_windows(data, window_size, step_size):
 
     return np.array(windows), np.array(labels)
 
+# Using a low pass filter with cutoff of 3Hz
+def lowpass_filter_by_group(df, group_cols, cutoff=20, fs=66.667, order=2):
+    signal_cols = [
+        col for col in df.columns
+        if col not in group_cols and pd.api.types.is_numeric_dtype(df[col])
+    ]
+    
+    def butter_lowpass(cutoff, fs, order):
+        nyquist = 0.5 * fs
+        normal_cutoff = cutoff / nyquist
+        return butter(order, normal_cutoff, btype='low', analog=False)
+
+    def filter_group(group, b, a):
+        filtered = group.copy()
+        for col in signal_cols:
+            if len(group) >= 3:  # filtfilt requires at least 3 points
+                filtered[col] = lfilter(b, a, group[col])
+        return filtered
+
+    b, a = butter_lowpass(cutoff, fs, order)
+
+    filtered_df = (
+        df.groupby(group_cols, group_keys=False)
+          .apply(lambda g: filter_group(g, b, a))
+          .reset_index(drop=True)
+    )
+    
+    return filtered_df
+
 # Load the data file
-data_path = "C:/Users/nicho/OneDrive - The University of Western Ontario/Fifth Year/Capstone/Code/Data/nick_data.xlsx"
+data_path = "C:/Users/nicho/OneDrive - The University of Western Ontario/Fifth Year/Capstone/Code/Data/nickV2_data.xlsx"
 
 data_df = pd.read_excel(data_path, sheet_name='Data')
+
+# Low pass filter for the sensor data
+group_cols = ['Orientation', 'Position']
+data_df = lowpass_filter_by_group(data_df, group_cols)
 
 # Parameters for sliding window
 window_size = 15
@@ -46,7 +80,7 @@ variables = data_df.columns[1:-2]
 for var in variables:
     var_columns = [col for col in x_data_df.columns if col.startswith(var)]
     average_columns[f"{var}_avg"] = x_data_df[var_columns].mean(axis=1)
-    variance_columns[f"{var}_var"] = x_data_df[var_columns].var(axis=1)
+    variance_columns[f"{var}_var"] = x_data_df[var_columns].var(axis=1, ddof=0)
     rms_columns[f"{var}_rms"] = np.sqrt((x_data_df[var_columns]**2).mean(axis=1))
     first_derivative_columns[f"{var}_first_derivative"] = x_data_df[var_columns].diff(axis=1).mean(axis=1)
     second_derivative_columns[f"{var}_second_derivative"] = x_data_df[var_columns].diff(axis=1).diff(axis=1).mean(axis=1)
