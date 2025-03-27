@@ -325,6 +325,9 @@ def create_proper_code(
     final_code = final_code.replace('input', 'modelInput')
     final_code = final_code.replace('output', 'modelOutput')
 
+    # 8) Trying to fix floating point issue
+    final_code = final_code.replace('double', 'float')
+
     # 8) write
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(final_code)

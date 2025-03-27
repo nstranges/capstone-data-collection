@@ -10,10 +10,10 @@ float cutoffHz = 20.0;
 float initialValue = 0.0;
 
 // The required setpoints for the positions
-const int numMotors = 3;
-const int numClasses = 8;
-const int numFeaturesAdded = 4;
-double setpoints[numClasses][numMotors] = {
+const int NUM_MOTORS = 3;
+const int NUM_CLASSES = 8;
+const int NUM_FEATURES_ADDED = 4;
+float setpoints[NUM_CLASSES][NUM_MOTORS] = {
     {0, 0, 0},  
     {350, 0, 0},  
     {0, 350, 0},  
@@ -25,16 +25,18 @@ double setpoints[numClasses][numMotors] = {
 };
 
 // This is for the simple control mode
-// Fully closed is 1030deg. (4096/360)*1031 = 11,729 fully closed 
-double motContPositions[numClasses][numMotors] = {
+// Fully closed is 1030deg. (4096/360)*1031 = 11,729 fully closed
+int positionVal = 11729 / 2; // Reducing this distance by half
+int thumbVal = 3519; // 30% of the original value
+float motContPositions[NUM_CLASSES][NUM_MOTORS] = {
     {0, 0, 0},  
-    {11729, 0, 0},  
-    {0, 11729, 0},  
-    {0, 0, 11729},  
-    {11729, 11729, 0},  
-    {11729, 0, 11729},  
-    {0, 11729, 11729},  
-    {11729, 11729, 11729}
+    {thumbVal, 0, 0},  
+    {0, positionVal, 0},  
+    {0, 0, positionVal},  
+    {thumbVal, positionVal, 0},  
+    {thumbVal, 0, positionVal},  
+    {0, positionVal, positionVal},  
+    {thumbVal, positionVal, positionVal}
 };
 
 // The bluetooth serial module
@@ -45,33 +47,37 @@ const int FLEX_PIN1 = 25;
 const int FLEX_PIN2 = 26;
 const int FLEX_PIN3 = 27;
 
+// Pin for the switch
+const int SWITCH_PIN = 14;
+
 // Holds tuning values
 struct PIDParams {
-  double Kp;
-  double Ki;
-  double Kd;
+  float Kp;
+  float Ki;
+  float Kd;
 };
 
 // Torque hold mode for grabbing stuff
-double setpoint1;
-double setpoint2;
-double setpoint3;
-bool torqueHoldMode[numMotors] = {false, false, false};
+float setpoint1;
+float setpoint2;
+float setpoint3;
+bool torqueHoldMode[NUM_MOTORS] = {false, false, false};
 bool pidMode = false;
-bool modelInference = true;
+bool modelInference = false;
 int curModelTestOut = 1;
 int modelTestOutCount = 0;
 int secondsToHoldTest = 5;
 bool backToHomePos = true;
+bool justTurnedOn = true;
 int torqueThreshold = 0; // CHANGE THIS FROM TESTING
 
 // Input and output values
-double flexADC1;
-double motorPos1;
-double flexADC2;
-double motorPos2;
-double flexADC3;
-double motorPos3;
+float flexADC1;
+float motorPos1;
+float flexADC2;
+float motorPos2;
+float flexADC3;
+float motorPos3;
 
 // PID tuning values
 PIDParams pidParams1 = {5.146, 17.4956, 0.0};
@@ -96,14 +102,14 @@ int emgPin3 = 13;
 int rawEmg3;
 
 // Prediction params
-const int inputSize = 4*numFeaturesAdded;
-double modelInput[inputSize];
-double modelOutput[numClasses];
+const int inputSize = 4*NUM_FEATURES_ADDED;
+float modelInput[inputSize];
+float modelOutput[NUM_CLASSES];
 
 // For sequential samples
 int predVar = 0;
 int predVarCount = 0;
-const int MAX_PRED_VAR_COUNT = 2;
+const int MAX_PRED_VAR_COUNT = 10;
 
 // Shared data queue
 struct SharedData {
@@ -126,10 +132,10 @@ const int MODEL_DELAY_TIME = 2000;
 // Data for the feature engineering
 // The array is avg, var
 struct FeatEng {
-    double emg1[numFeaturesAdded];
-    double emg2[numFeaturesAdded];
-    double emg3[numFeaturesAdded];
-    double pulse[numFeaturesAdded];
+    float emg1[NUM_FEATURES_ADDED];
+    float emg2[NUM_FEATURES_ADDED];
+    float emg3[NUM_FEATURES_ADDED];
+    float pulse[NUM_FEATURES_ADDED];
 };
 
 // For the model results
@@ -167,6 +173,7 @@ void setup(void) {
     pinMode(FLEX_PIN1, INPUT);
     pinMode(FLEX_PIN2, INPUT);
     pinMode(FLEX_PIN3, INPUT);
+    pinMode(SWITCH_PIN, INPUT);
 
     // Enable PIDs
     loop1.SetMode(AUTOMATIC);
@@ -327,25 +334,26 @@ FeatEng calculateFeatures() {
     }
 
     // Each feature prep
+    float deltaT = 0.018;
     features.emg1[0] = calculateAverage(emg1Buffer, 15);
     features.emg1[1] = calculateVariance(emg1Buffer, 15, features.emg1[0]);
-    features.emg1[2] = calculateFirstDerivative(emg1Buffer, 15, 0.015);
-    features.emg1[3] = calculateSecondDerivative(emg1Buffer, 15, 0.015);
+    features.emg1[2] = calculateFirstDerivative(emg1Buffer, 15, deltaT);
+    features.emg1[3] = calculateSecondDerivative(emg1Buffer, 15, deltaT);
 
     features.emg2[0] = calculateAverage(emg2Buffer, 15);
     features.emg2[1] = calculateVariance(emg2Buffer, 15, features.emg2[0]);
-    features.emg2[2] = calculateFirstDerivative(emg2Buffer, 15, 0.015);
-    features.emg2[3] = calculateSecondDerivative(emg2Buffer, 15, 0.015);
+    features.emg2[2] = calculateFirstDerivative(emg2Buffer, 15, deltaT);
+    features.emg2[3] = calculateSecondDerivative(emg2Buffer, 15, deltaT);
 
     features.emg3[0] = calculateAverage(emg3Buffer, 15);
     features.emg3[1] = calculateVariance(emg3Buffer, 15, features.emg3[0]);
-    features.emg3[2] = calculateFirstDerivative(emg3Buffer, 15, 0.015);
-    features.emg3[3] = calculateSecondDerivative(emg3Buffer, 15, 0.015);
+    features.emg3[2] = calculateFirstDerivative(emg3Buffer, 15, deltaT);
+    features.emg3[3] = calculateSecondDerivative(emg3Buffer, 15, deltaT);
 
     features.pulse[0] = calculateAverage(pulseBuffer, 15);
     features.pulse[1] = calculateVariance(pulseBuffer, 15, features.pulse[0]);
-    features.pulse[2] = calculateFirstDerivative(pulseBuffer, 15, 0.015);
-    features.pulse[3] = calculateSecondDerivative(pulseBuffer, 15, 0.015);
+    features.pulse[2] = calculateFirstDerivative(pulseBuffer, 15, deltaT);
+    features.pulse[3] = calculateSecondDerivative(pulseBuffer, 15, deltaT);
 
     return features;
 }
@@ -358,10 +366,10 @@ void RunPIDs(void * pvParameters) {
 
     String sendData = "";
     String gotData = "";
-    int overrideVals[numMotors] = {0, 0, 0};
+    int overrideVals[NUM_MOTORS] = {0, 0, 0};
 
     int lastIndex = 0, index = 0;
-    int feedbackVals[numMotors*2];
+    int feedbackVals[NUM_MOTORS*2];
 
     while (true) {
         // Check if we want PID or not
@@ -374,7 +382,7 @@ void RunPIDs(void * pvParameters) {
             // Check for extracted data
             if (gotData != "") {
                 // Extract position and torque feedback
-                for (int i = 0; i < (numMotors*2); i++) {
+                for (int i = 0; i < (NUM_MOTORS*2); i++) {
                     int nextIndex = gotData.indexOf(',', lastIndex);
                     if (nextIndex == -1) nextIndex = gotData.length();
                     
@@ -383,7 +391,7 @@ void RunPIDs(void * pvParameters) {
                 }
 
                 // Torque feedback check
-                // for (int i = 0; i < numMotors; i++) {
+                // for (int i = 0; i < NUM_MOTORS; i++) {
                 //     // Torque too high
                 //     if (abs(feedbackVals[i]) >= torqueThreshold) {
                 //         torqueHoldMode[i] = true;
@@ -391,7 +399,7 @@ void RunPIDs(void * pvParameters) {
                 // }
             }
             else {
-                for (int i = 0; i < numMotors; i++) {
+                for (int i = 0; i < NUM_MOTORS; i++) {
                 torqueHoldMode[i] = false;
                 }
             }
@@ -438,7 +446,7 @@ void RunPIDs(void * pvParameters) {
         }
 
         // Sending the data over Bluetooth for motor command
-        sendData = String(motorPos1) + "," + String(motorPos2) + "," + String(motorPos3);
+        sendData = String(motorPos1) + "," + String(motorPos3) + "," + String(motorPos2);
         SerialBT.println(sendData);
         Serial.println(sendData);
         
@@ -479,7 +487,7 @@ void RunModel(void * pvParameters) {
             // Format input
             if (xSemaphoreTake(featuresMutex, portMAX_DELAY)) {
                 int sampleIndex = 0;
-                for (int i = 0; i < (4*numFeaturesAdded); i += 4) {
+                for (int i = 0; i < (4*NUM_FEATURES_ADDED); i += 4) {
                     modelInput[i] = features.emg1[sampleIndex];
                     modelInput[i+1] = features.emg2[sampleIndex];
                     modelInput[i+2] = features.emg3[sampleIndex];
@@ -493,6 +501,9 @@ void RunModel(void * pvParameters) {
             // Model output val
             int maxIndex = 0;
 
+            // Read the switch
+            modelInference = digitalRead(SWITCH_PIN);
+
             // Running the model or not
             if (modelInference) {
                 // Predict with the model
@@ -500,7 +511,7 @@ void RunModel(void * pvParameters) {
 
                 // Output the results
                 float maxVal = 0;
-                for (int i = 0; i < numClasses; i++) {
+                for (int i = 0; i < NUM_CLASSES; i++) {
                     if (modelOutput[i] > maxVal) {
                         maxIndex = i;
                         maxVal = modelOutput[i];
@@ -515,7 +526,7 @@ void RunModel(void * pvParameters) {
     
                     if (!backToHomePos) {
                         curModelTestOut++;
-                        if (curModelTestOut >= numClasses) curModelTestOut = 1;
+                        if (curModelTestOut >= NUM_CLASSES) curModelTestOut = 1;
                     }
              
                     backToHomePos = !backToHomePos;

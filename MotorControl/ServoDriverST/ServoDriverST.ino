@@ -168,6 +168,27 @@ void loop() {
   int lastIndex = 0, index = 0;
   int feedbackVals[numMotors];
 
+  // Motor jogging script
+//  if (Serial.available() > 0) {
+//    String input = Serial.readStringUntil('\n');
+//    int command = input.toInt();
+//    int wantSpeed = 200;
+//  
+//    if (command == 1) {
+//      wantSpeed = 200;
+//    }
+//    else if (command == 2) {
+//      wantSpeed = -200;
+//    }
+//    else {
+//      wantSpeed = 0;
+//    }
+//  
+//    st.WriteSpe(3, wantSpeed);
+//  
+//    delay(25);
+//  }
+
   if (currentMillis - previousMillis >= interval) {
     previousMillis = currentMillis;
 

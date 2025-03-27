@@ -18,7 +18,7 @@ def create_sliding_windows(data, window_size, step_size):
     return np.array(windows), np.array(labels)
 
 # Using a low pass filter with cutoff of 3Hz
-def lowpass_filter_by_group(df, group_cols, cutoff=20, fs=66.667, order=2):
+def lowpass_filter_by_group(df, group_cols, cutoff=20, fs=60, order=2):
     signal_cols = [
         col for col in df.columns
         if col not in group_cols and pd.api.types.is_numeric_dtype(df[col])
@@ -47,7 +47,7 @@ def lowpass_filter_by_group(df, group_cols, cutoff=20, fs=66.667, order=2):
     return filtered_df
 
 # Load the data file
-data_path = "C:/Users/nicho/OneDrive - The University of Western Ontario/Fifth Year/Capstone/Code/Data/nickV2_data.xlsx"
+data_path = "C:/Users/nicho/OneDrive - The University of Western Ontario/Fifth Year/Capstone/Code/Data/firmani_data.xlsx"
 
 data_df = pd.read_excel(data_path, sheet_name='Data')
 
