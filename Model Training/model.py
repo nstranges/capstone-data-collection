@@ -12,7 +12,7 @@ def train_model(X_train, y_train, X_test, y_test, feature_names):
     rf_model = RandomForestClassifier(
         verbose=1,
         n_jobs=-1,
-        n_estimators=100, #try 50 # was 100
+        n_estimators=15, #try 50 # was 100
         #max_depth = 10, #default is none
         #max_features=3, # Fewer features per split, less memory
         random_state=42
@@ -326,7 +326,7 @@ def create_proper_code(
     final_code = final_code.replace('output', 'modelOutput')
 
     # 8) Trying to fix floating point issue
-    final_code = final_code.replace('double', 'float')
+    #final_code = final_code.replace('double', 'float')
 
     # 8) write
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -396,12 +396,6 @@ def create_model():
 def create_model_code(model):
     #Send the model to code
     code = m2c.export_to_c(model, function_name="predict")
-    file_path = "modelCode.txt"
-    with open(file_path, "w") as file:
-        file.write(code)
-
-    print("Model code created")
-    output_file = "adjustedModelCode.txt"
 
     replacements = {
         "(double[]){1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}": "defaultValues1",
@@ -415,6 +409,10 @@ def create_model_code(model):
         "#include <string.h>": "",
     }
 
+    for old_val, new_val in replacements.items():
+        code = code.replace(old_val, new_val)
+
+     # 5) assemble final code
     text_to_insert = ("double defaultValues1[8] = {1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};"+
                     "\ndouble defaultValues2[8] = {0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};"+
                     "\ndouble defaultValues3[8] = {0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0};"+
@@ -424,7 +422,22 @@ def create_model_code(model):
                     "\ndouble defaultValues7[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0};"+
                     "\ndouble defaultValues8[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0};\n")
 
-    create_proper_code(file_path, replacements, output_file, text_to_insert)
+    # 6) Place #include lines at top
+    includes = '#include "helpers.h"\n#include <cstring>\n#include <string.h>\n' + text_to_insert
+    final_code = includes + code
+
+    # 7) Changing the variable names
+    final_code = final_code.replace('input', 'modelInput')
+    final_code = final_code.replace('output', 'modelOutput')
+
+    file_path = "modelCode.txt"
+    with open(file_path, "w") as file:
+        file.write(code)
+
+    print("Model code created")
+    output_file = "adjustedModelCode.txt"
+
+    #create_proper_code(file_path, replacements, output_file, text_to_insert)
     print("Model code adjusted")
 
 # Runs the model

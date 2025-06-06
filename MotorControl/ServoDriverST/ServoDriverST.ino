@@ -172,19 +172,42 @@ void loop() {
 //  if (Serial.available() > 0) {
 //    String input = Serial.readStringUntil('\n');
 //    int command = input.toInt();
-//    int wantSpeed = 200;
+//    int wantSpeed;
+//    int wantedMotor;
 //  
-//    if (command == 1) {
+//    if (command == 11) {
 //      wantSpeed = 200;
+//      wantedMotor = 1;
 //    }
-//    else if (command == 2) {
+//    else if (command == 12) {
 //      wantSpeed = -200;
+//      wantedMotor = 1;
+//    }
+//    else if (command == 21) {
+//      wantSpeed = 200;
+//      wantedMotor = 2;
+//    }
+//    else if (command == 22) {
+//      wantSpeed = -200;
+//      wantedMotor = 2;
+//    }
+//    else if (command == 31) {
+//      wantSpeed = 200;
+//      wantedMotor = 3;
+//    }
+//    else if (command == 32) {
+//      wantSpeed = -200;
+//      wantedMotor = 3;
 //    }
 //    else {
 //      wantSpeed = 0;
+//  
+//      for (int i = 1; i <= 3; i++) {
+//        st.WriteSpe(i, 0);
+//      }
 //    }
 //  
-//    st.WriteSpe(3, wantSpeed);
+//    st.WriteSpe(wantedMotor, wantSpeed);
 //  
 //    delay(25);
 //  }

@@ -47,7 +47,7 @@ def lowpass_filter_by_group(df, group_cols, cutoff=20, fs=60, order=2):
     return filtered_df
 
 # Load the data file
-data_path = "C:/Users/nicho/OneDrive - The University of Western Ontario/Fifth Year/Capstone/Code/Data/firmani_data.xlsx"
+data_path = "C:/Users/nicho/OneDrive - The University of Western Ontario/Fifth Year/Capstone/Code/Data/firmani2_data.xlsx"
 
 data_df = pd.read_excel(data_path, sheet_name='Data')
 

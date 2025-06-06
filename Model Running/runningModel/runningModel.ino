@@ -6,14 +6,14 @@
 
 // For the butterworth filter
 FilterTwoPole filters[4];
-float cutoffHz = 20.0;
-float initialValue = 0.0;
+double cutoffHz = 20.0;
+double initialValue = 0.0;
 
 // The required setpoints for the positions
 const int NUM_MOTORS = 3;
 const int NUM_CLASSES = 8;
 const int NUM_FEATURES_ADDED = 4;
-float setpoints[NUM_CLASSES][NUM_MOTORS] = {
+double setpoints[NUM_CLASSES][NUM_MOTORS] = {
     {0, 0, 0},  
     {350, 0, 0},  
     {0, 350, 0},  
@@ -28,7 +28,7 @@ float setpoints[NUM_CLASSES][NUM_MOTORS] = {
 // Fully closed is 1030deg. (4096/360)*1031 = 11,729 fully closed
 int positionVal = 11729 / 2; // Reducing this distance by half
 int thumbVal = 3519; // 30% of the original value
-float motContPositions[NUM_CLASSES][NUM_MOTORS] = {
+double motContPositions[NUM_CLASSES][NUM_MOTORS] = {
     {0, 0, 0},  
     {thumbVal, 0, 0},  
     {0, positionVal, 0},  
@@ -52,32 +52,32 @@ const int SWITCH_PIN = 14;
 
 // Holds tuning values
 struct PIDParams {
-  float Kp;
-  float Ki;
-  float Kd;
+  double Kp;
+  double Ki;
+  double Kd;
 };
 
 // Torque hold mode for grabbing stuff
-float setpoint1;
-float setpoint2;
-float setpoint3;
+double setpoint1;
+double setpoint2;
+double setpoint3;
 bool torqueHoldMode[NUM_MOTORS] = {false, false, false};
 bool pidMode = false;
 bool modelInference = false;
 int curModelTestOut = 1;
 int modelTestOutCount = 0;
-int secondsToHoldTest = 5;
+int secondsToHoldTest = 2;
 bool backToHomePos = true;
 bool justTurnedOn = true;
 int torqueThreshold = 0; // CHANGE THIS FROM TESTING
 
 // Input and output values
-float flexADC1;
-float motorPos1;
-float flexADC2;
-float motorPos2;
-float flexADC3;
-float motorPos3;
+double flexADC1;
+double motorPos1;
+double flexADC2;
+double motorPos2;
+double flexADC3;
+double motorPos3;
 
 // PID tuning values
 PIDParams pidParams1 = {5.146, 17.4956, 0.0};
@@ -103,13 +103,13 @@ int rawEmg3;
 
 // Prediction params
 const int inputSize = 4*NUM_FEATURES_ADDED;
-float modelInput[inputSize];
-float modelOutput[NUM_CLASSES];
+double modelInput[inputSize];
+double modelOutput[NUM_CLASSES];
 
 // For sequential samples
 int predVar = 0;
 int predVarCount = 0;
-const int MAX_PRED_VAR_COUNT = 10;
+const int MAX_PRED_VAR_COUNT = 1;
 
 // Shared data queue
 struct SharedData {
@@ -126,16 +126,16 @@ int curSampleCount = 0;
 
 // Delay times in ms
 const int AVG_SAMPLE_TIME = 18;
-const int PID_CHANGE_TIME = 2;
+const int PID_CHANGE_TIME = 6;
 const int MODEL_DELAY_TIME = 2000;
 
 // Data for the feature engineering
 // The array is avg, var
 struct FeatEng {
-    float emg1[NUM_FEATURES_ADDED];
-    float emg2[NUM_FEATURES_ADDED];
-    float emg3[NUM_FEATURES_ADDED];
-    float pulse[NUM_FEATURES_ADDED];
+    double emg1[NUM_FEATURES_ADDED];
+    double emg2[NUM_FEATURES_ADDED];
+    double emg3[NUM_FEATURES_ADDED];
+    double pulse[NUM_FEATURES_ADDED];
 };
 
 // For the model results
@@ -179,6 +179,10 @@ void setup(void) {
     loop1.SetMode(AUTOMATIC);
     loop2.SetMode(AUTOMATIC);
     loop3.SetMode(AUTOMATIC);
+
+    for (int i = 0; i < 4; i++) {
+        filters[i].setAsFilter(LOWPASS_BUTTERWORTH, cutoffHz, initialValue);
+    }
 
     // Create semaphores
     featuresMutex = xSemaphoreCreateMutex();
@@ -246,10 +250,10 @@ void SensorCollection(void * pvParameters) {
     while (true) {
         // Read sensors
         SharedData data;
-        data.pulse = analogRead(pulsePin);
-        data.emg1 = analogRead(emgPin1);
-        data.emg2 = analogRead(emgPin2);
-        data.emg3 = analogRead(emgPin3);
+        data.emg1 = filters[0].input(analogRead(emgPin1));
+        data.emg2 = filters[1].input(analogRead(emgPin2));
+        data.emg3 = filters[2].input(analogRead(emgPin3));
+        data.pulse = filters[3].input(analogRead(pulsePin));
 
         // Add to the data queue
         if (curSampleCount >= NUM_SAMPLES) {
@@ -312,29 +316,21 @@ void SensorCollection(void * pvParameters) {
     }
 }
 
-// Resetting the main filter
-void resetFilter(int index) {filters[index].setAsFilter(LOWPASS_BUTTERWORTH, cutoffHz, initialValue);}
-
 // Calculating the extra features
 FeatEng calculateFeatures() {
     FeatEng features;
 
-    // Reset all filters
-    for (int i = 0; i < 4; i++) {
-        resetFilter(i);
-    }
-
     // Buffers for the calculations
     int emg1Buffer[15], emg2Buffer[15], emg3Buffer[15], pulseBuffer[15];
     for (int i = 0; i < 15; i++) {
-        emg1Buffer[i] = filters[0].input(samples[i].emg1);
-        emg2Buffer[i] = filters[1].input(samples[i].emg2);
-        emg3Buffer[i] = filters[2].input(samples[i].emg3);
-        pulseBuffer[i] = filters[3].input(samples[i].pulse);
+        emg1Buffer[i] = samples[i].emg1;
+        emg2Buffer[i] = samples[i].emg2;
+        emg3Buffer[i] = samples[i].emg3;
+        pulseBuffer[i] = samples[i].pulse;
     }
 
     // Each feature prep
-    float deltaT = 0.018;
+    double deltaT = 0.018;
     features.emg1[0] = calculateAverage(emg1Buffer, 15);
     features.emg1[1] = calculateVariance(emg1Buffer, 15, features.emg1[0]);
     features.emg1[2] = calculateFirstDerivative(emg1Buffer, 15, deltaT);
@@ -510,12 +506,20 @@ void RunModel(void * pvParameters) {
                 predict(modelInput, modelOutput);
 
                 // Output the results
-                float maxVal = 0;
+                double maxVal = 0;
                 for (int i = 0; i < NUM_CLASSES; i++) {
                     if (modelOutput[i] > maxVal) {
                         maxIndex = i;
                         maxVal = modelOutput[i];
                     }
+                }
+
+                // Making it a binary model
+                if (maxIndex == 1) {
+                  maxIndex = 0;
+                }
+                else if (!maxIndex == 0) {
+                  maxIndex = 7;
                 }
             }
             else {
@@ -558,38 +562,38 @@ void RunModel(void * pvParameters) {
   	}
 }
 
-float calculateAverage(int buffer[], int size) {
-	float sum = 0;
+double calculateAverage(int buffer[], int size) {
+	double sum = 0;
 	for (int i = 0; i < size; i++) {
 		sum += buffer[i];
 	}
 	return sum / size;
 }
 
-float calculateVariance(int buffer[], int size, float avg) {
-	float sumSq = 0;
+double calculateVariance(int buffer[], int size, double avg) {
+	double sumSq = 0;
 	for (int i = 0; i < size; i++) {
 		sumSq += pow(buffer[i] - avg, 2);
 	}
 	return sumSq / size;
 }
 
-float calculateFirstDerivative(int buffer[], int size, float dt) {
+double calculateFirstDerivative(int buffer[], int size, double dt) {
 	if (size < 2) return 0;
 
-	float sum = 0;
+	double sum = 0;
 	for (int i = 1; i < size; i++) {
 		sum += (buffer[i] - buffer[i - 1]) / dt;
 	}
 	return sum / (size - 1);
 }
 
-float calculateSecondDerivative(int buffer[], int size, float dt) {
+double calculateSecondDerivative(int buffer[], int size, double dt) {
 	if (size < 3) return 0;
 
-	float sum = 0;
+	double sum = 0;
 	for (int i = 1; i < size - 1; i++) {
-		float accel = (buffer[i + 1] - 2 * buffer[i] + buffer[i - 1]) / (dt * dt);
+		double accel = (buffer[i + 1] - 2 * buffer[i] + buffer[i - 1]) / (dt * dt);
 		sum += accel;
 	}
 	return sum / (size - 2);
